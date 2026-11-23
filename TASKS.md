@@ -21,11 +21,11 @@ Tracking remaining work across phases for **android-lens**.
 ---
 
 ## Phase 1 — Tauri v2 Desktop MVP (<150 MB RAM)
-- [ ] Initialize `apps/desktop` with Tauri v2 + lightweight TypeScript frontend
-- [ ] Add read-only **CodeMirror 6** source viewer with project folder picker, clickable breakpoint gutter, and active execution line highlight
-- [ ] Build Debug toolbar (Attach / Launch `-D`, Pause, Resume, Step Over/Into/Out)
-- [ ] Build Threads, Call Stack, and lazy-expanding Variables tree panels
-- [ ] Create `crates/logcat-stream`: package-scoped `adb logcat --pid` with auto-reattach on app restart, level/tag filtering, and crash stack grouping
+- [x] Initialize `apps/desktop` with Tauri v2 + lightweight TypeScript frontend
+- [x] Add read-only **CodeMirror 6** source viewer with project folder picker, clickable breakpoint gutter, and active execution line highlight
+- [x] Build Debug toolbar (Attach / Launch `-D`, Pause, Resume, Step Over/Into/Out)
+- [x] Build Threads, Call Stack, and lazy-expanding Variables tree panels
+- [x] Create `crates/logcat-stream`: package-scoped `adb logcat --pid` with auto-reattach on app restart, level/tag filtering, and crash stack grouping
 
 ---
 

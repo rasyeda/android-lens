@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -15,7 +16,7 @@ pub enum AdbError {
     ProcessNotFound(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AdbDevice {
     pub serial: String,
     pub state: String,
@@ -152,6 +153,30 @@ pub async fn list_packages(serial: &str, filter: Option<&str>) -> Result<Vec<Str
         .collect();
     pkgs.sort();
     Ok(pkgs)
+}
+
+/// Resolves the default launcher component (`<package>/<activity>`) for a package.
+pub async fn resolve_launcher_activity(serial: &str, package: &str) -> Result<String, AdbError> {
+    let out = run_adb(&[
+        "-s",
+        serial,
+        "shell",
+        "cmd",
+        "package",
+        "resolve-activity",
+        "--brief",
+        package,
+    ])
+    .await?;
+    for line in out.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.contains('/') && !trimmed.starts_with("priority=") {
+            return Ok(trimmed.to_string());
+        }
+    }
+    Err(AdbError::CommandFailed(format!(
+        "could not resolve launcher activity for '{package}'"
+    )))
 }
 
 /// Launches an activity with `-D -S` (force-stop + Wait for Debugger) so JDWP can attach

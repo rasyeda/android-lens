@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Android Lens</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Top Debug Toolbar -->
+      <header class="toolbar">
+        <div class="toolbar-group brand-group">
+          <span class="brand-dot"></span>
+          <span class="brand-title">Android Lens</span>
+        </div>
+
+        <div class="toolbar-group target-group">
+          <select id="device-select" title="ADB Device"></select>
+          <button id="refresh-devices-btn" class="btn btn-icon" title="Refresh ADB devices & packages">↻</button>
+          <input
+            id="package-input"
+            list="package-datalist"
+            placeholder="com.example.app"
+            title="Target Android package"
+          />
+          <datalist id="package-datalist"></datalist>
+          <button id="attach-btn" class="btn btn-primary" title="Attach to running app">Attach</button>
+          <button id="launch-btn" class="btn btn-accent" title="Force-stop and launch with am start -D (Wait for Debugger)">Launch -D</button>
+          <button id="detach-btn" class="btn btn-danger" disabled title="Detach debugger">Detach</button>
+        </div>
+
+        <div class="toolbar-divider"></div>
+
+        <div class="toolbar-group step-group">
+          <button id="pause-btn" class="btn" disabled title="Suspend VM">⏸ Pause</button>
+          <button id="resume-btn" class="btn btn-green" disabled title="Resume VM (F5)">▶ Resume</button>
+          <button id="step-over-btn" class="btn" disabled title="Step Over (F10)">⤵ Over</button>
+          <button id="step-into-btn" class="btn" disabled title="Step Into (F11)">↓ Into</button>
+          <button id="step-out-btn" class="btn" disabled title="Step Out (Shift+F11)">↑ Out</button>
+        </div>
+
+        <div class="toolbar-spacer"></div>
+
+        <div class="toolbar-group status-group">
+          <span id="status-badge" class="status-badge disconnected">Disconnected</span>
+        </div>
+      </header>
+
+      <div id="banner" class="banner hidden"></div>
+
+      <!-- Main 3-Pane Workspace -->
+      <main class="workspace">
+        <!-- Left: Project Folder & Source Tree -->
+        <aside class="pane pane-left">
+          <div class="pane-header">
+            <span class="pane-title">PROJECT</span>
+            <button id="open-folder-btn" class="btn btn-xs">Open Folder</button>
+          </div>
+          <div id="project-path-bar" class="sub-bar muted">No folder opened</div>
+          <div class="tree-filter-bar">
+            <input id="tree-filter-input" placeholder="Filter visible files…" />
+          </div>
+          <div id="file-tree" class="pane-body file-tree"></div>
+        </aside>
+
+        <!-- Center: Read-Only CodeMirror 6 Source Viewer -->
+        <section class="pane pane-center">
+          <div id="editor-tabs" class="editor-tabs"></div>
+          <div id="editor-container" class="editor-container">
+            <div id="editor-empty" class="empty-state">
+              <div class="empty-title">Read-Only Source Viewer</div>
+              <div class="empty-sub">
+                Open your Android project folder to browse <code>.kt</code> / <code>.java</code> files.<br />
+                Click the left gutter to toggle breakpoints (works before or after attaching).
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right: Threads, Call Stack, Variables -->
+        <aside class="pane pane-right">
+          <section class="right-section section-threads">
+            <div class="pane-header">
+              <span class="pane-title">THREADS</span>
+              <span id="threads-count" class="count-pill">0</span>
+            </div>
+            <div id="threads-list" class="pane-body list-body">
+              <div class="empty-hint">Attach to inspect threads</div>
+            </div>
+          </section>
+
+          <section class="right-section section-stack">
+            <div class="pane-header">
+              <span class="pane-title">CALL STACK</span>
+              <span id="stack-count" class="count-pill">0</span>
+            </div>
+            <div id="stack-list" class="pane-body list-body">
+              <div class="empty-hint">Pause or hit a breakpoint</div>
+            </div>
+          </section>
+
+          <section class="right-section section-vars">
+            <div class="pane-header">
+              <span class="pane-title">VARIABLES</span>
+              <span id="vars-frame-label" class="muted small-label"></span>
+            </div>
+            <div id="vars-tree" class="pane-body vars-tree">
+              <div class="empty-hint">No paused frame</div>
+            </div>
+          </section>
+        </aside>
+      </main>
+
+      <!-- Bottom Dock: Logcat, Crashes, Breakpoints -->
+      <footer class="dock">
+        <div class="dock-header">
+          <div class="dock-tabs">
+            <button class="dock-tab active" data-tab="logcat">
+              Logcat <span id="logcat-pid-pill" class="count-pill">idle</span>
+            </button>
+            <button class="dock-tab" data-tab="crashes">
+              Crashes <span id="crashes-count" class="count-pill">0</span>
+            </button>
+            <button class="dock-tab" data-tab="breakpoints">
+              Breakpoints <span id="bps-count" class="count-pill">0</span>
+            </button>
+          </div>
+
+          <div id="logcat-controls" class="dock-controls">
+            <select id="logcat-level" title="Minimum log level">
+              <option value="verbose">Verbose (V)</option>
+              <option value="debug" selected>Debug (D)</option>
+              <option value="info">Info (I)</option>
+              <option value="warn">Warn (W)</option>
+              <option value="error">Error (E)</option>
+              <option value="fatal">Fatal (F)</option>
+            </select>
+            <input id="logcat-tag" placeholder="Tag filter" />
+            <input id="logcat-query" placeholder="Search logcat…" />
+            <label class="checkbox-label">
+              <input id="logcat-autoscroll" type="checkbox" checked />
+              Follow
+            </label>
+            <button id="logcat-toggle-btn" class="btn btn-xs">Start Logcat</button>
+            <button id="logcat-clear-btn" class="btn btn-xs">Clear</button>
+          </div>
+        </div>
+
+        <div id="tab-logcat" class="dock-panel active">
+          <div id="logcat-list" class="logcat-list">
+            <div class="empty-hint">Select a package and click Attach or Start Logcat</div>
+          </div>
+        </div>
+
+        <div id="tab-crashes" class="dock-panel">
+          <div id="crashes-list" class="crashes-list">
+            <div class="empty-hint">No crashes detected</div>
+          </div>
+        </div>
+
+        <div id="tab-breakpoints" class="dock-panel">
+          <div id="breakpoints-list" class="breakpoints-list">
+            <div class="empty-hint">Click the source editor gutter to add a breakpoint</div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
