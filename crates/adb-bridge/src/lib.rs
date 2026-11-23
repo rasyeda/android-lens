@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::process::Command;
 
@@ -153,10 +154,32 @@ pub async fn list_packages(serial: &str, filter: Option<&str>) -> Result<Vec<Str
     Ok(pkgs)
 }
 
-/// Launches an activity with `-D` (Wait for Debugger) so JDWP can attach before startup code runs.
+/// Launches an activity with `-D -S` (force-stop + Wait for Debugger) so JDWP can attach
+/// before startup code runs.
 pub async fn launch_wait_for_debugger(serial: &str, component: &str) -> Result<(), AdbError> {
-    run_adb(&["-s", serial, "shell", "am", "start", "-D", "-n", component]).await?;
+    run_adb(&[
+        "-s", serial, "shell", "am", "start", "-D", "-S", "-n", component,
+    ])
+    .await?;
     Ok(())
+}
+
+/// Polls `find_package_pid` until the package starts or `timeout` elapses.
+pub async fn wait_for_package_pid(
+    serial: &str,
+    package: &str,
+    timeout: Duration,
+) -> Result<u32, AdbError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(pid) = find_package_pid(serial, package).await {
+            return Ok(pid);
+        }
+        if Instant::now() >= deadline {
+            return Err(AdbError::ProcessNotFound(package.to_string()));
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
 }
 
 /// Forwards `tcp:<local_port>` to `jdwp:<pid>` and returns a guard that cleans it up on drop.

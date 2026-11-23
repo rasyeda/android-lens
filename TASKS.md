@@ -10,13 +10,13 @@ Tracking remaining work across phases for **android-lens**.
 - [x] Implement async JDWP wire protocol (handshake, dynamic `IDSizes`, packet demux, event stream)
 - [x] Implement `.kt` / `.java` source-line breakpoint resolution, stepping (`over`/`into`/`out`), stack frames, and local variable formatting
 - [x] Build interactive `cli-poc` REPL
-- [ ] **Live test against Kotlin app (`sholattv`) on TV emulator:**
-  - [ ] Verify `cli-poc devices`, `packages`, and `attach` handshake + `IDSizes`
-  - [ ] Verify setting a breakpoint in a `.kt` file, hitting it, inspecting `bt` and `locals`, stepping (`n`/`s`/`o`), and resuming (`c`)
-- [ ] **Pending breakpoints (`ClassPrepare`):** Automatically install breakpoints when a target class is loaded *after* attach
-- [ ] **Launch & Wait for Debugger (`am start -D`):** Add `--launch <pkg/activity>` flag to `cli-poc attach` for debugging app startup
-- [ ] **Object field expansion:** Add `inspect <0xobject_id>` command using `ReferenceType.FieldsWithGeneric` + `ObjectReference.GetValues` (including superclass fields)
-- [ ] **Unit tests for JDWP wire codec:** Test `Writer`/`Reader` round-trips, 4-byte vs 8-byte `IdSizes`, and `Event.Composite` parsing
+- [x] **Live test against Kotlin app (`sholattv`) on TV emulator:**
+  - [x] Verify `cli-poc devices`, `packages`, and `attach` handshake + `IDSizes`
+  - [x] Verify setting a breakpoint in a `.kt` file, hitting it, inspecting `bt` and `locals`, stepping (`n`/`s`/`o`), and resuming (`c`)
+- [x] **Pending breakpoints (`ClassPrepare`):** Automatically install breakpoints when a target class is loaded *after* attach
+- [x] **Launch & Wait for Debugger (`am start -D`):** Add `--launch <pkg/activity>` flag to `cli-poc attach` for debugging app startup
+- [x] **Object field expansion:** Add `inspect <0xobject_id>` command using `ReferenceType.FieldsWithGeneric` + `ObjectReference.GetValues` (including superclass fields)
+- [x] **Unit tests for JDWP wire codec:** Test `Writer`/`Reader` round-trips, 4-byte vs 8-byte `IdSizes`, and `Event.Composite` parsing
 
 ---
 
