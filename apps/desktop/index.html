@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,148 +8,277 @@
   </head>
   <body>
     <div id="app">
-      <!-- Top Debug Toolbar -->
-      <header class="toolbar">
-        <div class="toolbar-group brand-group">
-          <span class="brand-dot"></span>
-          <span class="brand-title">Android Lens</span>
-        </div>
-
-        <div class="toolbar-group target-group">
-          <select id="device-select" title="ADB Device"></select>
-          <button id="refresh-devices-btn" class="btn btn-icon" title="Refresh ADB devices & packages">↻</button>
+      <!-- Top Titlebar / Debug Toolbar (native titlebar hidden via Overlay) -->
+      <header class="toolbar" data-tauri-drag-region>
+        <div class="toolbar-group">
+          <select id="device-select" class="ctrl select-device" title="ADB device"></select>
+          <button
+            id="refresh-devices-btn"
+            class="btn btn-icon"
+            title="Refresh ADB devices and packages"
+            aria-label="Refresh devices"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13.5 8a5.5 5.5 0 1 1-1.3-3.55" />
+              <path d="M13.5 2.75v2.75h-2.75" />
+            </svg>
+          </button>
           <input
             id="package-input"
+            class="ctrl input-package"
             list="package-datalist"
             placeholder="com.example.app"
             title="Target Android package"
           />
           <datalist id="package-datalist"></datalist>
-          <button id="attach-btn" class="btn btn-primary" title="Attach to running app">Attach</button>
-          <button id="launch-btn" class="btn btn-accent" title="Force-stop and launch with am start -D (Wait for Debugger)">Launch -D</button>
-          <button id="detach-btn" class="btn btn-danger" disabled title="Detach debugger">Detach</button>
         </div>
 
-        <div class="toolbar-divider"></div>
+        <div class="toolbar-spacer" data-tauri-drag-region></div>
 
-        <div class="toolbar-group step-group">
-          <button id="pause-btn" class="btn" disabled title="Suspend VM">⏸ Pause</button>
-          <button id="resume-btn" class="btn btn-green" disabled title="Resume VM (F5)">▶ Resume</button>
-          <button id="step-over-btn" class="btn" disabled title="Step Over (F10)">⤵ Over</button>
-          <button id="step-into-btn" class="btn" disabled title="Step Into (F11)">↓ Into</button>
-          <button id="step-out-btn" class="btn" disabled title="Step Out (Shift+F11)">↑ Out</button>
+        <!-- Progressive Execution Controls -->
+        <div class="toolbar-group" id="controls-disconnected">
+          <div class="split-btn">
+            <button id="debug-auto-btn" class="btn btn-primary split-main" title="Attach if running, otherwise fresh-launch and wait for debugger">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M4.5 3.25a.75.75 0 0 1 1.14-.64l7.5 4.75a.75.75 0 0 1 0 1.28l-7.5 4.75A.75.75 0 0 1 4.5 12.75V3.25z" />
+              </svg>
+              <span>Debug</span>
+            </button>
+            <button id="debug-menu-btn" class="btn btn-primary split-caret" aria-label="Debug options" title="Choose attach or fresh launch">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4.5 6.5 8 10l3.5-3.5" />
+              </svg>
+            </button>
+            <div id="debug-menu" class="popover hidden">
+              <button class="popover-item" data-mode="auto">
+                <span class="popover-title">Smart Debug</span>
+                <span class="popover-desc">Attach if running, or launch cleanly</span>
+              </button>
+              <button class="popover-item" data-mode="attach">
+                <span class="popover-title">Attach to Running</span>
+                <span class="popover-desc">Connect to existing app process</span>
+              </button>
+              <button class="popover-item" data-mode="launch">
+                <span class="popover-title">Fresh Launch &amp; Wait</span>
+                <span class="popover-desc">Restart app and pause before onCreate</span>
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group hidden" id="controls-running">
+          <button id="pause-btn" class="btn" title="Pause execution">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="4" y="3" width="3" height="10" rx="0.75" />
+              <rect x="9" y="3" width="3" height="10" rx="0.75" />
+            </svg>
+            <span>Pause</span>
+          </button>
+          <button id="stop-running-btn" class="btn btn-icon btn-danger-ghost" title="Detach debugger" aria-label="Detach">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="3.5" y="3.5" width="9" height="9" rx="1.25" />
+            </svg>
+          </button>
+        </div>
 
-        <div class="toolbar-group status-group">
-          <span id="status-badge" class="status-badge disconnected">Disconnected</span>
+        <div class="toolbar-group hidden" id="controls-paused">
+          <button id="resume-btn" class="btn btn-go" title="Continue execution (F5)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.5 3.25a.75.75 0 0 1 1.14-.64l7.5 4.75a.75.75 0 0 1 0 1.28l-7.5 4.75A.75.75 0 0 1 4.5 12.75V3.25z" />
+            </svg>
+            <span>Continue</span>
+            <kbd class="kbd">F5</kbd>
+          </button>
+          <div class="seg-group">
+            <button id="step-over-btn" class="btn" title="Step Over (F10)">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9.5a5 5 0 0 1 9.2-2.5" />
+                <path d="M12.75 4v3.25H9.5" />
+                <circle cx="8" cy="12.5" r="1.25" fill="currentColor" stroke="none" />
+              </svg>
+              <span>Over</span>
+            </button>
+            <button id="step-into-btn" class="btn" title="Step Into (F11)">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 2.5v7.5" />
+                <path d="M5 7.25 8 10.25l3-3" />
+                <circle cx="8" cy="13" r="1.25" fill="currentColor" stroke="none" />
+              </svg>
+              <span>Into</span>
+            </button>
+            <button id="step-out-btn" class="btn" title="Step Out (Shift+F11)">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 10.25V2.75" />
+                <path d="M5 5.5 8 2.5l3 3" />
+                <circle cx="8" cy="13" r="1.25" fill="currentColor" stroke="none" />
+              </svg>
+              <span>Out</span>
+            </button>
+          </div>
+          <button id="stop-paused-btn" class="btn btn-icon btn-danger-ghost" title="Detach debugger" aria-label="Detach">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="3.5" y="3.5" width="9" height="9" rx="1.25" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="toolbar-spacer" data-tauri-drag-region></div>
+
+        <!-- Status & Layout Toggles -->
+        <div class="toolbar-group">
+          <span id="status-pill" class="status-pill disconnected">
+            <span class="status-dot"></span>
+            <span id="status-text">Ready</span>
+          </span>
+          <div class="toolbar-sep"></div>
+          <button id="toggle-left-btn" class="btn btn-icon active" title="Toggle files panel (⌘B)" aria-label="Toggle files">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2.5" width="12" height="11" rx="1.75" />
+              <path d="M6 2.5v11" />
+            </svg>
+          </button>
+          <button id="toggle-dock-btn" class="btn btn-icon active" title="Toggle logcat dock (⌘J)" aria-label="Toggle dock">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2.5" width="12" height="11" rx="1.75" />
+              <path d="M2 9.5h12" />
+            </svg>
+          </button>
+          <button id="theme-toggle-btn" class="btn btn-icon" title="Switch Dark / Light theme" aria-label="Toggle theme">
+            <svg id="theme-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" />
+            </svg>
+          </button>
         </div>
       </header>
 
       <div id="banner" class="banner hidden"></div>
 
-      <!-- Main 3-Pane Workspace -->
-      <main class="workspace">
-        <!-- Left: Project Folder & Source Tree -->
-        <aside class="pane pane-left">
+      <!-- Main Workspace -->
+      <main id="workspace" class="workspace">
+        <!-- Left Rail: Project Explorer -->
+        <aside id="pane-left" class="pane pane-left">
           <div class="pane-header">
-            <span class="pane-title">PROJECT</span>
-            <button id="open-folder-btn" class="btn btn-xs">Open Folder</button>
+            <span class="pane-title">FILES</span>
+            <div class="pane-actions">
+              <button id="quick-open-btn" class="btn btn-ghost-xs" title="Quick Open file (⌘P)">
+                <kbd class="kbd">⌘P</kbd>
+              </button>
+              <button id="open-folder-btn" class="btn btn-ghost-xs" title="Open Android project folder">Open</button>
+            </div>
           </div>
-          <div id="project-path-bar" class="sub-bar muted">No folder opened</div>
-          <div class="tree-filter-bar">
-            <input id="tree-filter-input" placeholder="Filter visible files…" />
+          <div id="project-path-bar" class="path-bar muted">No folder selected</div>
+          <div class="filter-bar">
+            <input id="tree-filter-input" class="ctrl input-sm" placeholder="Filter files…" />
           </div>
           <div id="file-tree" class="pane-body file-tree"></div>
         </aside>
 
-        <!-- Center: Read-Only CodeMirror 6 Source Viewer -->
+        <!-- Center Stage: Read-Only CodeMirror 6 Source Viewer -->
         <section class="pane pane-center">
           <div id="editor-tabs" class="editor-tabs"></div>
           <div id="editor-container" class="editor-container">
-            <div id="editor-empty" class="empty-state">
-              <div class="empty-title">Read-Only Source Viewer</div>
-              <div class="empty-sub">
-                Open your Android project folder to browse <code>.kt</code> / <code>.java</code> files.<br />
-                Click the left gutter to toggle breakpoints (works before or after attaching).
+            <div id="editor-empty" class="empty-stage">
+              <div class="guide-card">
+                <div class="guide-title">Get started</div>
+                <div class="guide-list">
+                  <div class="guide-row" id="guide-device">
+                    <span class="guide-mark">1</span>
+                    <div class="guide-copy">
+                      <div class="guide-label">Android device</div>
+                      <div class="guide-sub" id="guide-device-sub">Checking ADB…</div>
+                    </div>
+                  </div>
+                  <div class="guide-row" id="guide-app">
+                    <span class="guide-mark">2</span>
+                    <div class="guide-copy">
+                      <div class="guide-label">Target application</div>
+                      <div class="guide-sub" id="guide-app-sub">Select a debuggable package above</div>
+                    </div>
+                  </div>
+                  <div class="guide-row" id="guide-folder">
+                    <span class="guide-mark">3</span>
+                    <div class="guide-copy">
+                      <div class="guide-label">Source folder</div>
+                      <div class="guide-sub" id="guide-folder-sub">Open your project to browse .kt / .java files &amp; click gutters for breakpoints</div>
+                    </div>
+                    <button id="guide-open-btn" class="btn">Open Folder</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- Right: Threads, Call Stack, Variables -->
+        <!-- Right Inspector: Variables First, Call Stack + Thread Selector Below -->
         <aside class="pane pane-right">
-          <section class="right-section section-threads">
-            <div class="pane-header">
-              <span class="pane-title">THREADS</span>
-              <span id="threads-count" class="count-pill">0</span>
-            </div>
-            <div id="threads-list" class="pane-body list-body">
-              <div class="empty-hint">Attach to inspect threads</div>
-            </div>
-          </section>
-
-          <section class="right-section section-stack">
-            <div class="pane-header">
-              <span class="pane-title">CALL STACK</span>
-              <span id="stack-count" class="count-pill">0</span>
-            </div>
-            <div id="stack-list" class="pane-body list-body">
-              <div class="empty-hint">Pause or hit a breakpoint</div>
-            </div>
-          </section>
-
-          <section class="right-section section-vars">
+          <section class="inspector-section inspector-vars">
             <div class="pane-header">
               <span class="pane-title">VARIABLES</span>
-              <span id="vars-frame-label" class="muted small-label"></span>
+              <span id="vars-frame-label" class="header-meta"></span>
             </div>
             <div id="vars-tree" class="pane-body vars-tree">
-              <div class="empty-hint">No paused frame</div>
+              <div class="empty-hint">Variables appear here when paused</div>
+            </div>
+          </section>
+
+          <section class="inspector-section inspector-stack">
+            <div class="pane-header">
+              <span class="pane-title">CALL STACK</span>
+              <div class="pane-actions">
+                <select id="thread-select" class="ctrl select-thread" title="Active thread" disabled>
+                  <option value="">No thread</option>
+                </select>
+                <button id="dim-system-btn" class="btn btn-ghost-xs active" title="Dim Android / Java framework frames">App focus</button>
+              </div>
+            </div>
+            <div id="stack-list" class="pane-body stack-list">
+              <div class="empty-hint">Pause or hit a breakpoint</div>
             </div>
           </section>
         </aside>
       </main>
 
       <!-- Bottom Dock: Logcat, Crashes, Breakpoints -->
-      <footer class="dock">
+      <footer id="dock" class="dock">
         <div class="dock-header">
           <div class="dock-tabs">
             <button class="dock-tab active" data-tab="logcat">
-              Logcat <span id="logcat-pid-pill" class="count-pill">idle</span>
+              <span>Logcat</span>
+              <span id="logcat-pid-pill" class="pill">idle</span>
             </button>
             <button class="dock-tab" data-tab="crashes">
-              Crashes <span id="crashes-count" class="count-pill">0</span>
+              <span>Crashes</span>
+              <span id="crashes-count" class="pill">0</span>
             </button>
             <button class="dock-tab" data-tab="breakpoints">
-              Breakpoints <span id="bps-count" class="count-pill">0</span>
+              <span>Breakpoints</span>
+              <span id="bps-count" class="pill">0</span>
             </button>
           </div>
 
           <div id="logcat-controls" class="dock-controls">
-            <select id="logcat-level" title="Minimum log level">
-              <option value="verbose">Verbose (V)</option>
-              <option value="debug" selected>Debug (D)</option>
-              <option value="info">Info (I)</option>
-              <option value="warn">Warn (W)</option>
-              <option value="error">Error (E)</option>
-              <option value="fatal">Fatal (F)</option>
+            <select id="logcat-level" class="ctrl ctrl-sm" title="Minimum log level">
+              <option value="verbose">Verbose</option>
+              <option value="debug" selected>Debug</option>
+              <option value="info">Info</option>
+              <option value="warn">Warn</option>
+              <option value="error">Error</option>
+              <option value="fatal">Fatal</option>
             </select>
-            <input id="logcat-tag" placeholder="Tag filter" />
-            <input id="logcat-query" placeholder="Search logcat…" />
-            <label class="checkbox-label">
+            <input id="logcat-tag" class="ctrl ctrl-sm input-dock" placeholder="Tag…" />
+            <input id="logcat-query" class="ctrl ctrl-sm input-dock" placeholder="Search…" />
+            <label class="toggle-check">
               <input id="logcat-autoscroll" type="checkbox" checked />
-              Follow
+              <span>Follow</span>
             </label>
-            <button id="logcat-toggle-btn" class="btn btn-xs">Start Logcat</button>
-            <button id="logcat-clear-btn" class="btn btn-xs">Clear</button>
+            <button id="logcat-toggle-btn" class="btn btn-ghost-xs">Start</button>
+            <button id="logcat-clear-btn" class="btn btn-ghost-xs">Clear</button>
           </div>
         </div>
 
         <div id="tab-logcat" class="dock-panel active">
           <div id="logcat-list" class="logcat-list">
-            <div class="empty-hint">Select a package and click Attach or Start Logcat</div>
+            <div class="empty-hint">Logcat streams automatically when debugging starts</div>
           </div>
         </div>
 
@@ -161,10 +290,25 @@
 
         <div id="tab-breakpoints" class="dock-panel">
           <div id="breakpoints-list" class="breakpoints-list">
-            <div class="empty-hint">Click the source editor gutter to add a breakpoint</div>
+            <div class="empty-hint">Click the gutter next to any source line to add a breakpoint</div>
           </div>
         </div>
       </footer>
+    </div>
+
+    <!-- ⌘P Quick Open Palette -->
+    <div id="quick-open-backdrop" class="modal-backdrop hidden">
+      <div class="modal-palette">
+        <div class="palette-input-row">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <circle cx="7.25" cy="7.25" r="4.75" />
+            <path d="M10.75 10.75 14 14" />
+          </svg>
+          <input id="quick-open-input" placeholder="Open file by name…" autocomplete="off" />
+          <kbd class="kbd">ESC</kbd>
+        </div>
+        <div id="quick-open-results" class="palette-results"></div>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

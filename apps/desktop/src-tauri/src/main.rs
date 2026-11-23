@@ -13,7 +13,7 @@ use logcat_stream::{
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
-use crate::files::{FsEntry, SourceFileContent};
+use crate::files::{FsEntry, ProjectFile, SourceFileContent};
 use crate::session::{
     BreakpointDto, DebugSession, SessionStatus, StackFrameDto, ThreadDto, VariableDto,
 };
@@ -62,13 +62,20 @@ async fn debug_attach(
     state: State<'_, AppState>,
     serial: Option<String>,
     package: String,
-    launch: bool,
+    mode: Option<String>,
     activity: Option<String>,
     port: Option<u16>,
 ) -> Result<SessionStatus, String> {
     state
         .debug
-        .attach(app, serial, package, launch, activity, port.unwrap_or(5005))
+        .attach(
+            app,
+            serial,
+            package,
+            mode.as_deref().unwrap_or("auto"),
+            activity,
+            port.unwrap_or(5005),
+        )
         .await
 }
 
@@ -172,6 +179,11 @@ async fn fs_list_dir(path: String) -> Result<Vec<FsEntry>, String> {
 #[tauri::command]
 async fn fs_read_file(path: String) -> Result<SourceFileContent, String> {
     files::read_source_file(&path)
+}
+
+#[tauri::command]
+async fn fs_list_project_files(project_root: String) -> Result<Vec<ProjectFile>, String> {
+    files::list_project_files(&project_root)
 }
 
 #[tauri::command]
@@ -300,6 +312,7 @@ fn main() {
             debug_inspect_object,
             fs_list_dir,
             fs_read_file,
+            fs_list_project_files,
             fs_find_source_file,
             logcat_start,
             logcat_stop,

@@ -69,6 +69,12 @@ interface FsEntry {
   is_dir: boolean;
 }
 
+interface ProjectFile {
+  name: string;
+  rel_path: string;
+  abs_path: string;
+}
+
 interface SourceFileContent {
   path: string;
   file_name: string;
@@ -108,8 +114,7 @@ type DebugUiEvent =
       location: LocationDto;
     }
   | { kind: "resumed" }
-  | { kind: "vm_exited" }
-  | { kind: "message"; text: string };
+  | { kind: "vm_exited" };
 
 type LogcatEvent =
   | { kind: "entry"; entry: LogEntry }
@@ -129,37 +134,79 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   unknown: 7,
 };
 
+const SYSTEM_FRAME_PREFIXES = [
+  "android.",
+  "androidx.",
+  "java.",
+  "javax.",
+  "dalvik.",
+  "kotlin.",
+  "kotlinx.",
+  "com.android.",
+  "sun.",
+  "libcore.",
+];
+
 const MAX_RENDERED_LOGS = 1500;
+
+const CHEVRON_RIGHT = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>`;
+const CHEVRON_DOWN = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>`;
+const MOON_PATH = `<path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" />`;
+const SUN_PATH = `<circle cx="8" cy="8" r="3" /><path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M12.4 3.6l-1.05 1.05M4.65 11.35 3.6 12.4" />`;
 
 // DOM refs
 const deviceSelect = document.getElementById("device-select") as HTMLSelectElement;
 const refreshDevicesBtn = document.getElementById("refresh-devices-btn") as HTMLButtonElement;
 const packageInput = document.getElementById("package-input") as HTMLInputElement;
 const packageDatalist = document.getElementById("package-datalist") as HTMLDataListElement;
-const attachBtn = document.getElementById("attach-btn") as HTMLButtonElement;
-const launchBtn = document.getElementById("launch-btn") as HTMLButtonElement;
-const detachBtn = document.getElementById("detach-btn") as HTMLButtonElement;
+
+const controlsDisconnected = document.getElementById("controls-disconnected") as HTMLDivElement;
+const controlsRunning = document.getElementById("controls-running") as HTMLDivElement;
+const controlsPaused = document.getElementById("controls-paused") as HTMLDivElement;
+
+const debugAutoBtn = document.getElementById("debug-auto-btn") as HTMLButtonElement;
+const debugMenuBtn = document.getElementById("debug-menu-btn") as HTMLButtonElement;
+const debugMenu = document.getElementById("debug-menu") as HTMLDivElement;
 const pauseBtn = document.getElementById("pause-btn") as HTMLButtonElement;
+const stopRunningBtn = document.getElementById("stop-running-btn") as HTMLButtonElement;
+const stopPausedBtn = document.getElementById("stop-paused-btn") as HTMLButtonElement;
 const resumeBtn = document.getElementById("resume-btn") as HTMLButtonElement;
 const stepOverBtn = document.getElementById("step-over-btn") as HTMLButtonElement;
 const stepIntoBtn = document.getElementById("step-into-btn") as HTMLButtonElement;
 const stepOutBtn = document.getElementById("step-out-btn") as HTMLButtonElement;
-const statusBadge = document.getElementById("status-badge") as HTMLSpanElement;
+
+const statusPill = document.getElementById("status-pill") as HTMLSpanElement;
+const statusText = document.getElementById("status-text") as HTMLSpanElement;
+const toggleLeftBtn = document.getElementById("toggle-left-btn") as HTMLButtonElement;
+const toggleDockBtn = document.getElementById("toggle-dock-btn") as HTMLButtonElement;
+const themeToggleBtn = document.getElementById("theme-toggle-btn") as HTMLButtonElement;
+const themeIcon = document.getElementById("theme-icon") as unknown as SVGSVGElement;
 const banner = document.getElementById("banner") as HTMLDivElement;
 
+const workspaceEl = document.getElementById("workspace") as HTMLElement;
+const dockEl = document.getElementById("dock") as HTMLElement;
+
+const quickOpenBtn = document.getElementById("quick-open-btn") as HTMLButtonElement;
 const openFolderBtn = document.getElementById("open-folder-btn") as HTMLButtonElement;
+const guideOpenBtn = document.getElementById("guide-open-btn") as HTMLButtonElement;
 const projectPathBar = document.getElementById("project-path-bar") as HTMLDivElement;
 const treeFilterInput = document.getElementById("tree-filter-input") as HTMLInputElement;
 const fileTreeEl = document.getElementById("file-tree") as HTMLDivElement;
+
+const guideDeviceRow = document.getElementById("guide-device") as HTMLDivElement;
+const guideDeviceSub = document.getElementById("guide-device-sub") as HTMLDivElement;
+const guideAppRow = document.getElementById("guide-app") as HTMLDivElement;
+const guideAppSub = document.getElementById("guide-app-sub") as HTMLDivElement;
+const guideFolderRow = document.getElementById("guide-folder") as HTMLDivElement;
+const guideFolderSub = document.getElementById("guide-folder-sub") as HTMLDivElement;
 
 const editorTabsEl = document.getElementById("editor-tabs") as HTMLDivElement;
 const editorContainer = document.getElementById("editor-container") as HTMLDivElement;
 const editorEmpty = document.getElementById("editor-empty") as HTMLDivElement;
 
-const threadsListEl = document.getElementById("threads-list") as HTMLDivElement;
-const threadsCountEl = document.getElementById("threads-count") as HTMLSpanElement;
+const threadSelect = document.getElementById("thread-select") as HTMLSelectElement;
+const dimSystemBtn = document.getElementById("dim-system-btn") as HTMLButtonElement;
 const stackListEl = document.getElementById("stack-list") as HTMLDivElement;
-const stackCountEl = document.getElementById("stack-count") as HTMLSpanElement;
 const varsTreeEl = document.getElementById("vars-tree") as HTMLDivElement;
 const varsFrameLabelEl = document.getElementById("vars-frame-label") as HTMLSpanElement;
 
@@ -176,8 +223,13 @@ const logcatListEl = document.getElementById("logcat-list") as HTMLDivElement;
 const crashesListEl = document.getElementById("crashes-list") as HTMLDivElement;
 const breakpointsListEl = document.getElementById("breakpoints-list") as HTMLDivElement;
 
-// App state
+const quickOpenBackdrop = document.getElementById("quick-open-backdrop") as HTMLDivElement;
+const quickOpenInput = document.getElementById("quick-open-input") as HTMLInputElement;
+const quickOpenResults = document.getElementById("quick-open-results") as HTMLDivElement;
+
+// State
 let projectRoot: string | null = localStorage.getItem("android-lens:projectRoot");
+let projectFiles: ProjectFile[] = [];
 const expandedDirs = new Set<string>();
 const dirCache = new Map<string, FsEntry[]>();
 
@@ -198,11 +250,16 @@ let currentStatus: SessionStatus = {
 let breakpoints: BreakpointDto[] = [];
 let selectedThreadId: string | null = null;
 let selectedFrameIndex = 0;
+let cachedFrames: StackFrameDto[] = [];
+let dimSystemFrames = true;
 let execHighlight: { fileName: string; line: number } | null = null;
 
 let logcatRunning = false;
 let logEntries: LogEntry[] = [];
 let crashGroups: CrashGroup[] = [];
+
+let paletteMatches: ProjectFile[] = [];
+let paletteIndex = 0;
 
 const viewer = new SourceViewer(editorContainer, async (fileName, line) => {
   try {
@@ -216,18 +273,64 @@ const viewer = new SourceViewer(editorContainer, async (fileName, line) => {
   }
 });
 
+// --- Theme & Layout Persistence ---
+
+function applyTheme(theme: "dark" | "light") {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("android-lens:theme", theme);
+  themeIcon.innerHTML = theme === "dark" ? SUN_PATH : MOON_PATH;
+}
+
+function toggleLeftPane(force?: boolean) {
+  const collapsed = force ?? !workspaceEl.classList.contains("left-collapsed");
+  workspaceEl.classList.toggle("left-collapsed", collapsed);
+  toggleLeftBtn.classList.toggle("active", !collapsed);
+  localStorage.setItem("android-lens:leftCollapsed", collapsed ? "1" : "0");
+}
+
+function toggleDock(force?: boolean) {
+  const collapsed = force ?? !dockEl.classList.contains("collapsed");
+  dockEl.classList.toggle("collapsed", collapsed);
+  toggleDockBtn.classList.toggle("active", !collapsed);
+  localStorage.setItem("android-lens:dockCollapsed", collapsed ? "1" : "0");
+}
+
 function showBanner(text: string, isInfo = false) {
-  banner.textContent = text;
-  banner.className = isInfo ? "banner info" : "banner";
+  banner.innerHTML = "";
+  const msg = document.createElement("span");
+  msg.textContent = text;
   const close = document.createElement("button");
-  close.className = "btn btn-xs";
+  close.className = "btn btn-ghost-xs";
   close.textContent = "Dismiss";
-  close.onclick = () => banner.classList.add("hidden");
-  banner.appendChild(close);
+  close.onclick = hideBanner;
+  banner.className = isInfo ? "banner info" : "banner";
+  banner.append(msg, close);
 }
 
 function hideBanner() {
   banner.classList.add("hidden");
+}
+
+function updateGuideChecklist() {
+  const hasDevice = Boolean(deviceSelect.value);
+  guideDeviceRow.classList.toggle("done", hasDevice);
+  guideDeviceRow.querySelector(".guide-mark")!.textContent = hasDevice ? "✓" : "1";
+  guideDeviceSub.textContent = hasDevice
+    ? deviceSelect.options[deviceSelect.selectedIndex]?.textContent ?? deviceSelect.value
+    : "Connect a device or start an Android emulator";
+
+  const pkg = packageInput.value.trim();
+  const hasPkg = pkg.length > 0;
+  guideAppRow.classList.toggle("done", hasPkg);
+  guideAppRow.querySelector(".guide-mark")!.textContent = hasPkg ? "✓" : "2";
+  guideAppSub.textContent = hasPkg ? pkg : "Pick a debuggable package from the top bar";
+
+  const hasFolder = Boolean(projectRoot);
+  guideFolderRow.classList.toggle("done", hasFolder);
+  guideFolderRow.querySelector(".guide-mark")!.textContent = hasFolder ? "✓" : "3";
+  guideFolderSub.textContent = projectRoot
+    ? projectRoot
+    : "Open your project to browse .kt / .java files & click gutters for breakpoints";
 }
 
 // --- ADB Devices & Packages ---
@@ -242,6 +345,7 @@ async function refreshDevices() {
       opt.value = "";
       opt.textContent = "No ADB devices";
       deviceSelect.appendChild(opt);
+      updateGuideChecklist();
       return;
     }
     for (const d of devices) {
@@ -254,6 +358,7 @@ async function refreshDevices() {
       deviceSelect.value = prev;
     }
     await refreshPackages();
+    updateGuideChecklist();
   } catch (err) {
     showBanner(`ADB error: ${String(err)}`);
   }
@@ -276,6 +381,7 @@ async function refreshPackages() {
     } else if (!packageInput.value && pkgs.length > 0) {
       packageInput.value = pkgs[0];
     }
+    updateGuideChecklist();
   } catch {
     // Ignore transient package lookup failure
   }
@@ -286,13 +392,35 @@ async function refreshPackages() {
 async function openProjectFolder(path: string) {
   projectRoot = path;
   localStorage.setItem("android-lens:projectRoot", path);
-  projectPathBar.textContent = path;
+  const folderName = path.split("/").filter(Boolean).pop() ?? path;
+  projectPathBar.textContent = folderName;
   projectPathBar.title = path;
   expandedDirs.clear();
   dirCache.clear();
   expandedDirs.add(path);
   await loadDir(path);
   renderFileTree();
+  updateGuideChecklist();
+
+  // Populate ⌘P Quick Open index asynchronously without blocking UI
+  invoke<ProjectFile[]>("fs_list_project_files", { projectRoot: path })
+    .then((files) => {
+      projectFiles = files;
+    })
+    .catch(() => {
+      projectFiles = [];
+    });
+}
+
+async function pickFolder() {
+  try {
+    const selected = await openDialog({ directory: true, multiple: false });
+    if (typeof selected === "string" && selected) {
+      await openProjectFolder(selected);
+    }
+  } catch (err) {
+    showBanner(`Folder picker error: ${String(err)}`);
+  }
 }
 
 async function loadDir(dirPath: string): Promise<FsEntry[]> {
@@ -306,7 +434,7 @@ async function loadDir(dirPath: string): Promise<FsEntry[]> {
 function renderFileTree() {
   fileTreeEl.innerHTML = "";
   if (!projectRoot) {
-    fileTreeEl.innerHTML = `<div class="empty-hint">Click "Open Folder" to browse source files</div>`;
+    fileTreeEl.innerHTML = `<div class="empty-hint">Open a project folder to browse source files</div>`;
     return;
   }
   const filter = treeFilterInput.value.trim().toLowerCase();
@@ -319,33 +447,33 @@ function renderFileTree() {
       }
       const row = document.createElement("div");
       row.className = "tree-row" + (entry.path === activeFilePath ? " active" : "");
-      row.style.paddingLeft = `${8 + depth * 14}px`;
+      row.style.paddingLeft = `${10 + depth * 14}px`;
 
       const caret = document.createElement("span");
       caret.className = "tree-caret";
       if (entry.is_dir) {
-        caret.textContent = expandedDirs.has(entry.path) ? "▾" : "▸";
+        caret.innerHTML = expandedDirs.has(entry.path) ? CHEVRON_DOWN : CHEVRON_RIGHT;
       }
 
-      const icon = document.createElement("span");
-      icon.className = "tree-icon";
+      const badge = document.createElement("span");
+      badge.className = "tree-badge";
       if (entry.is_dir) {
-        icon.classList.add("dir");
-        icon.textContent = "▣";
+        badge.classList.add("dir");
+        badge.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.3 1.5h4.7A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5z"/></svg>`;
       } else if (entry.name.endsWith(".kt") || entry.name.endsWith(".kts")) {
-        icon.classList.add("kt");
-        icon.textContent = "K";
+        badge.classList.add("kt");
+        badge.textContent = "K";
       } else if (entry.name.endsWith(".java")) {
-        icon.classList.add("java");
-        icon.textContent = "J";
+        badge.classList.add("java");
+        badge.textContent = "J";
       } else {
-        icon.textContent = "·";
+        badge.textContent = "·";
       }
 
       const label = document.createElement("span");
       label.textContent = entry.name;
 
-      row.append(caret, icon, label);
+      row.append(caret, badge, label);
       row.onclick = async () => {
         if (entry.is_dir) {
           if (expandedDirs.has(entry.path)) {
@@ -370,6 +498,54 @@ function renderFileTree() {
   renderLevel(projectRoot, 0);
 }
 
+// --- ⌘P Quick Open Palette ---
+
+function openQuickOpen() {
+  if (!projectRoot) {
+    void pickFolder();
+    return;
+  }
+  quickOpenBackdrop.classList.remove("hidden");
+  quickOpenInput.value = "";
+  paletteIndex = 0;
+  renderPaletteResults();
+  quickOpenInput.focus();
+}
+
+function closeQuickOpen() {
+  quickOpenBackdrop.classList.add("hidden");
+}
+
+function renderPaletteResults() {
+  const q = quickOpenInput.value.trim().toLowerCase();
+  paletteMatches = (
+    q
+      ? projectFiles.filter(
+          (f) => f.name.toLowerCase().includes(q) || f.rel_path.toLowerCase().includes(q),
+        )
+      : projectFiles
+  ).slice(0, 40);
+
+  if (paletteIndex >= paletteMatches.length) paletteIndex = 0;
+  quickOpenResults.innerHTML = "";
+
+  if (paletteMatches.length === 0) {
+    quickOpenResults.innerHTML = `<div class="empty-hint">No matching source files</div>`;
+    return;
+  }
+
+  paletteMatches.forEach((f, idx) => {
+    const item = document.createElement("div");
+    item.className = "palette-item" + (idx === paletteIndex ? " selected" : "");
+    item.innerHTML = `<span class="palette-name">${escapeHtml(f.name)}</span><span class="palette-path">${escapeHtml(f.rel_path)}</span>`;
+    item.onclick = () => {
+      closeQuickOpen();
+      void openSourceFile(f.abs_path);
+    };
+    quickOpenResults.appendChild(item);
+  });
+}
+
 // --- Source Viewer & Tabs ---
 
 async function openSourceFile(path: string, focusLine?: number) {
@@ -380,7 +556,7 @@ async function openSourceFile(path: string, focusLine?: number) {
       openFiles.set(path, doc);
     }
     activeFilePath = path;
-    editorEmpty.style.display = "none";
+    editorEmpty.classList.add("hidden");
     renderEditorTabs();
     renderFileTree();
 
@@ -400,7 +576,6 @@ async function openSourceFile(path: string, focusLine?: number) {
 }
 
 async function openBySourceName(fileName: string, line: number, classHint?: string) {
-  // Check already-open tabs first
   for (const [path, doc] of openFiles.entries()) {
     if (doc.file_name.toLowerCase() === fileName.toLowerCase()) {
       if (activeFilePath === path) {
@@ -451,7 +626,7 @@ function renderEditorTabs() {
         } else {
           activeFilePath = null;
           viewer.destroy();
-          editorEmpty.style.display = "flex";
+          editorEmpty.classList.remove("hidden");
           renderEditorTabs();
           renderFileTree();
         }
@@ -484,45 +659,42 @@ function syncEditorMarkers() {
   viewer.setExecutionLine(execLine, false);
 }
 
-// --- Debugger State, Threads, Stack, Lazy Variables ---
+// --- Progressive Toolbar & Debugger State ---
 
 function applyStatus(status: SessionStatus) {
   currentStatus = status;
-  const connected = status.state !== "disconnected";
-  const paused = status.state === "paused";
 
-  attachBtn.disabled = connected;
-  launchBtn.disabled = connected;
-  detachBtn.disabled = !connected;
-  pauseBtn.disabled = !connected || paused;
-  resumeBtn.disabled = !paused;
-  stepOverBtn.disabled = !paused;
-  stepIntoBtn.disabled = !paused;
-  stepOutBtn.disabled = !paused;
+  controlsDisconnected.classList.toggle("hidden", status.state !== "disconnected");
+  controlsRunning.classList.toggle("hidden", status.state !== "running");
+  controlsPaused.classList.toggle("hidden", status.state !== "paused");
 
-  statusBadge.className = `status-badge ${status.state}`;
+  deviceSelect.disabled = status.state !== "disconnected";
+  packageInput.disabled = status.state !== "disconnected";
+
+  statusPill.className = `status-pill ${status.state}`;
   if (status.state === "disconnected") {
-    statusBadge.textContent = "Disconnected";
+    statusText.textContent = "Ready";
+    statusPill.title = "";
     execHighlight = null;
     syncEditorMarkers();
-    threadsListEl.innerHTML = `<div class="empty-hint">Attach to inspect threads</div>`;
-    threadsCountEl.textContent = "0";
+    threadSelect.innerHTML = `<option value="">No thread</option>`;
+    threadSelect.disabled = true;
     stackListEl.innerHTML = `<div class="empty-hint">Pause or hit a breakpoint</div>`;
-    stackCountEl.textContent = "0";
-    varsTreeEl.innerHTML = `<div class="empty-hint">No paused frame</div>`;
+    varsTreeEl.innerHTML = `<div class="empty-hint">Variables appear here when paused</div>`;
     varsFrameLabelEl.textContent = "";
+    cachedFrames = [];
   } else if (status.state === "running") {
-    statusBadge.textContent = `Running · PID ${status.pid ?? "?"}`;
-    statusBadge.title = status.vm_info ?? "";
+    statusText.textContent = `Running · PID ${status.pid ?? "?"}`;
+    statusPill.title = status.vm_info ?? "";
     execHighlight = null;
     syncEditorMarkers();
   } else {
     const loc = status.paused_location;
     const where = loc?.source_file
       ? `${loc.source_file}:${loc.line_number ?? "?"}`
-      : loc?.method_name ?? status.paused_thread_name ?? "paused";
-    statusBadge.textContent = `Paused · ${where}`;
-    statusBadge.title = `${status.paused_thread_name ?? ""} — ${status.vm_info ?? ""}`;
+      : loc?.method_name ?? status.paused_thread_name ?? "Paused";
+    statusText.textContent = `Paused · ${where}`;
+    statusPill.title = `${status.paused_thread_name ?? ""} — ${status.vm_info ?? ""}`;
   }
 }
 
@@ -530,64 +702,71 @@ async function refreshThreads() {
   if (currentStatus.state === "disconnected") return;
   try {
     const threads = await invoke<ThreadDto[]>("debug_list_threads");
-    threadsCountEl.textContent = String(threads.length);
-    threadsListEl.innerHTML = "";
+    threadSelect.innerHTML = "";
+    threadSelect.disabled = threads.length === 0;
     for (const t of threads) {
-      const item = document.createElement("div");
-      item.className =
-        "list-item" +
-        (t.is_paused ? " paused-thread" : "") +
-        (t.id_hex === selectedThreadId ? " active" : "");
-      item.innerHTML = `<span class="frame-method">${escapeHtml(t.name)}</span><span class="frame-loc">${t.is_paused ? "paused" : t.id_hex}</span>`;
-      item.onclick = async () => {
-        selectedThreadId = t.id_hex;
-        selectedFrameIndex = 0;
-        await refreshThreads();
-        if (currentStatus.state === "paused") {
-          await refreshCallStack(t.id_hex);
-        }
-      };
-      threadsListEl.appendChild(item);
+      const opt = document.createElement("option");
+      opt.value = t.id_hex;
+      opt.textContent = t.is_paused ? `${t.name} (paused)` : t.name;
+      threadSelect.appendChild(opt);
+    }
+    if (selectedThreadId && threads.some((t) => t.id_hex === selectedThreadId)) {
+      threadSelect.value = selectedThreadId;
+    } else if (threads.length > 0) {
+      selectedThreadId = threads[0].id_hex;
+      threadSelect.value = selectedThreadId;
     }
   } catch {
     // Ignore if VM resumed mid-query
   }
 }
 
+function isSystemFrame(className: string): boolean {
+  return SYSTEM_FRAME_PREFIXES.some((prefix) => className.startsWith(prefix));
+}
+
+function renderCallStack() {
+  stackListEl.innerHTML = "";
+  if (cachedFrames.length === 0) {
+    stackListEl.innerHTML = `<div class="empty-hint">No stack frames</div>`;
+    return;
+  }
+
+  for (const f of cachedFrames) {
+    const sys = isSystemFrame(f.class_name);
+    const row = document.createElement("div");
+    row.className =
+      "frame-row" +
+      (f.index === selectedFrameIndex ? " active" : "") +
+      (dimSystemFrames && sys ? " system-frame" : "");
+
+    const shortCls = f.class_name.split(".").pop() ?? f.class_name;
+    const locText = f.source_file ? `${f.source_file}:${f.line_number ?? "?"}` : "native";
+    row.title = `${f.class_name}.${f.method_name} (${locText})`;
+    row.innerHTML = `<span class="frame-name">${escapeHtml(shortCls)}.${escapeHtml(f.method_name)}</span><span class="frame-loc">${escapeHtml(locText)}</span>`;
+
+    row.onclick = async () => {
+      selectedFrameIndex = f.index;
+      renderCallStack();
+      await refreshLocals(selectedThreadId ?? undefined, f.index, f);
+      if (f.source_file && f.line_number) {
+        await openBySourceName(f.source_file, f.line_number, f.class_name);
+      }
+    };
+    stackListEl.appendChild(row);
+  }
+}
+
 async function refreshCallStack(threadIdHex?: string) {
   try {
-    const frames = await invoke<StackFrameDto[]>("debug_get_call_stack", {
+    cachedFrames = await invoke<StackFrameDto[]>("debug_get_call_stack", {
       threadIdHex: threadIdHex ?? selectedThreadId,
     });
-    stackCountEl.textContent = String(frames.length);
-    stackListEl.innerHTML = "";
-    if (frames.length === 0) {
-      stackListEl.innerHTML = `<div class="empty-hint">No stack frames</div>`;
-      return;
+    renderCallStack();
+    if (cachedFrames.length > 0) {
+      const activeFrame = cachedFrames[selectedFrameIndex] ?? cachedFrames[0];
+      await refreshLocals(threadIdHex ?? selectedThreadId ?? undefined, activeFrame.index, activeFrame);
     }
-
-    for (const f of frames) {
-      const item = document.createElement("div");
-      item.className = "list-item" + (f.index === selectedFrameIndex ? " active" : "");
-      const shortCls = f.class_name.split(".").pop() ?? f.class_name;
-      const locText = f.source_file
-        ? `${f.source_file}:${f.line_number ?? "?"}`
-        : "native";
-      item.title = `${f.class_name}.${f.method_name} (${locText})`;
-      item.innerHTML = `<span class="frame-method">#${f.index} ${escapeHtml(shortCls)}.${escapeHtml(f.method_name)}</span><span class="frame-loc">${escapeHtml(locText)}</span>`;
-      item.onclick = async () => {
-        selectedFrameIndex = f.index;
-        await refreshCallStack(threadIdHex ?? selectedThreadId ?? undefined);
-        await refreshLocals(threadIdHex ?? selectedThreadId ?? undefined, f.index, f);
-        if (f.source_file && f.line_number) {
-          await openBySourceName(f.source_file, f.line_number, f.class_name);
-        }
-      };
-      stackListEl.appendChild(item);
-    }
-
-    const activeFrame = frames[selectedFrameIndex] ?? frames[0];
-    await refreshLocals(threadIdHex ?? selectedThreadId ?? undefined, activeFrame.index, activeFrame);
   } catch (err) {
     stackListEl.innerHTML = `<div class="empty-hint">${escapeHtml(String(err))}</div>`;
   }
@@ -598,9 +777,7 @@ async function refreshLocals(
   frameIndex: number,
   frame?: StackFrameDto,
 ) {
-  varsFrameLabelEl.textContent = frame
-    ? `#${frameIndex} ${frame.method_name}`
-    : `#${frameIndex}`;
+  varsFrameLabelEl.textContent = frame ? `${frame.method_name}()` : `#${frameIndex}`;
   try {
     const vars = await invoke<VariableDto[]>("debug_get_locals", {
       threadIdHex: threadIdHex ?? null,
@@ -608,7 +785,7 @@ async function refreshLocals(
     });
     varsTreeEl.innerHTML = "";
     if (vars.length === 0) {
-      varsTreeEl.innerHTML = `<div class="empty-hint">(no local variables in scope)</div>`;
+      varsTreeEl.innerHTML = `<div class="empty-hint">No local variables in scope</div>`;
       return;
     }
     for (const v of vars) {
@@ -619,17 +796,30 @@ async function refreshLocals(
   }
 }
 
+function formatReadableValue(v: VariableDto): string {
+  // Tuck raw `@0x...` address into tooltip; show short class name inline for objects
+  if (v.object_id_hex && v.value.includes("@0x")) {
+    const clsPart = v.value.split("@0x")[0];
+    return clsPart.split(".").pop() ?? clsPart;
+  }
+  return v.value;
+}
+
 function createVarNode(v: VariableDto, depth: number): HTMLElement {
   const container = document.createElement("div");
 
   const row = document.createElement("div");
   row.className = "var-row" + (v.is_expandable ? " expandable" : "");
-  row.style.paddingLeft = `${8 + depth * 14}px`;
+  row.style.paddingLeft = `${10 + depth * 14}px`;
+  if (v.object_id_hex) {
+    row.title = `${v.value} (${v.type_name})`;
+  }
 
   const caret = document.createElement("span");
   caret.className = "var-caret";
-  caret.textContent = v.is_expandable ? "▸" : "";
-
+  if (v.is_expandable) {
+    caret.innerHTML = CHEVRON_RIGHT;
+  }
   row.appendChild(caret);
 
   if (v.is_static) {
@@ -644,15 +834,6 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
   nameEl.textContent = v.name;
   row.appendChild(nameEl);
 
-  if (v.type_name) {
-    const shortType = v.type_name.split(".").pop() ?? v.type_name;
-    const typeEl = document.createElement("span");
-    typeEl.className = "var-type";
-    typeEl.textContent = `: ${shortType}`;
-    typeEl.title = v.type_name;
-    row.appendChild(typeEl);
-  }
-
   const eq = document.createElement("span");
   eq.className = "muted";
   eq.textContent = "=";
@@ -660,13 +841,21 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
 
   const valEl = document.createElement("span");
   valEl.className = "var-val";
-  valEl.textContent = v.value;
+  valEl.textContent = formatReadableValue(v);
   row.appendChild(valEl);
+
+  if (v.type_name && !v.is_expandable) {
+    const shortType = v.type_name.split(".").pop() ?? v.type_name;
+    const typeEl = document.createElement("span");
+    typeEl.className = "var-type";
+    typeEl.textContent = shortType;
+    row.appendChild(typeEl);
+  }
 
   if (v.declaring_class) {
     const owner = document.createElement("span");
     owner.className = "var-owner";
-    owner.textContent = `(${v.declaring_class.split(".").pop()})`;
+    owner.textContent = v.declaring_class.split(".").pop() ?? v.declaring_class;
     owner.title = `Inherited from ${v.declaring_class}`;
     row.appendChild(owner);
   }
@@ -684,19 +873,19 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
 
     row.onclick = async () => {
       expanded = !expanded;
-      caret.textContent = expanded ? "▾" : "▸";
+      caret.innerHTML = expanded ? CHEVRON_DOWN : CHEVRON_RIGHT;
       childrenWrap.style.display = expanded ? "block" : "none";
 
       if (expanded && !loaded) {
         loaded = true;
-        childrenWrap.innerHTML = `<div class="var-row muted" style="padding-left:${8 + (depth + 1) * 14}px">Loading…</div>`;
+        childrenWrap.innerHTML = `<div class="var-row muted" style="padding-left:${10 + (depth + 1) * 14}px">Loading…</div>`;
         try {
           const children = await invoke<VariableDto[]>("debug_inspect_object", {
             objectIdHex: objId,
           });
           childrenWrap.innerHTML = "";
           if (children.length === 0) {
-            childrenWrap.innerHTML = `<div class="var-row muted" style="padding-left:${8 + (depth + 1) * 14}px">(empty)</div>`;
+            childrenWrap.innerHTML = `<div class="var-row muted" style="padding-left:${10 + (depth + 1) * 14}px">(empty)</div>`;
           } else {
             for (const child of children) {
               childrenWrap.appendChild(createVarNode(child, depth + 1));
@@ -704,7 +893,7 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
           }
         } catch (err) {
           loaded = false;
-          childrenWrap.innerHTML = `<div class="var-row muted" style="padding-left:${8 + (depth + 1) * 14}px">Error: ${escapeHtml(String(err))}</div>`;
+          childrenWrap.innerHTML = `<div class="var-row muted" style="padding-left:${10 + (depth + 1) * 14}px">Error: ${escapeHtml(String(err))}</div>`;
         }
       }
     };
@@ -713,7 +902,7 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
   return container;
 }
 
-// --- Breakpoints Panel ---
+// --- Breakpoints ---
 
 function updateBreakpoints(next: BreakpointDto[]) {
   breakpoints = next;
@@ -722,7 +911,7 @@ function updateBreakpoints(next: BreakpointDto[]) {
 
   breakpointsListEl.innerHTML = "";
   if (breakpoints.length === 0) {
-    breakpointsListEl.innerHTML = `<div class="empty-hint">Click the source editor gutter to add a breakpoint</div>`;
+    breakpointsListEl.innerHTML = `<div class="empty-hint">Click the gutter next to any source line to add a breakpoint</div>`;
     return;
   }
 
@@ -739,14 +928,14 @@ function updateBreakpoints(next: BreakpointDto[]) {
     const detail = document.createElement("span");
     detail.className = "muted";
     detail.textContent = bp.class_name
-      ? `${bp.class_name}.${bp.method_name ?? ""}`
-      : `[${bp.status}]`;
+      ? `${bp.class_name.split(".").pop()}.${bp.method_name ?? ""}`
+      : "Waiting for class to load…";
 
     left.append(dot, desc, detail);
     left.onclick = () => void openBySourceName(bp.file, bp.line, bp.class_name ?? undefined);
 
     const rm = document.createElement("button");
-    rm.className = "btn btn-xs";
+    rm.className = "btn btn-ghost-xs";
     rm.textContent = "Remove";
     rm.onclick = async (e) => {
       e.stopPropagation();
@@ -769,11 +958,7 @@ function matchesLogFilter(entry: LogEntry): boolean {
   if (tag && !entry.tag.toLowerCase().includes(tag)) return false;
 
   const q = logcatQueryInput.value.trim().toLowerCase();
-  if (
-    q &&
-    !entry.message.toLowerCase().includes(q) &&
-    !entry.tag.toLowerCase().includes(q)
-  ) {
+  if (q && !entry.message.toLowerCase().includes(q) && !entry.tag.toLowerCase().includes(q)) {
     return false;
   }
   return true;
@@ -791,7 +976,7 @@ function renderAllLogs() {
   logcatListEl.innerHTML = "";
   const filtered = logEntries.filter(matchesLogFilter);
   if (filtered.length === 0) {
-    logcatListEl.innerHTML = `<div class="empty-hint">${logcatRunning ? "Waiting for matching logcat lines…" : "Logcat idle"}</div>`;
+    logcatListEl.innerHTML = `<div class="empty-hint">${logcatRunning ? "Waiting for matching logcat lines…" : "Logcat streams automatically when debugging starts"}</div>`;
     return;
   }
   const slice = filtered.slice(-MAX_RENDERED_LOGS);
@@ -826,7 +1011,7 @@ function appendLogEntry(entry: LogEntry) {
 
 function renderCrashes() {
   crashesCountEl.textContent = String(crashGroups.length);
-  crashesCountEl.className = crashGroups.length > 0 ? "count-pill alert" : "count-pill";
+  crashesCountEl.className = crashGroups.length > 0 ? "pill alert" : "pill";
   crashesListEl.innerHTML = "";
   if (crashGroups.length === 0) {
     crashesListEl.innerHTML = `<div class="empty-hint">No crashes detected</div>`;
@@ -856,7 +1041,7 @@ async function startLogcat(pkg: string) {
   if (!pkg) return;
   await invoke("logcat_start", { serial, package: pkg });
   logcatRunning = true;
-  logcatToggleBtn.textContent = "Stop Logcat";
+  logcatToggleBtn.textContent = "Stop";
   logEntries = [];
   crashGroups = [];
   renderAllLogs();
@@ -866,7 +1051,7 @@ async function startLogcat(pkg: string) {
 async function stopLogcat() {
   await invoke("logcat_stop");
   logcatRunning = false;
-  logcatToggleBtn.textContent = "Start Logcat";
+  logcatToggleBtn.textContent = "Start";
   logcatPidPill.textContent = "idle";
 }
 
@@ -878,63 +1063,78 @@ function escapeHtml(s: string): string {
     .replaceAll('"', "&quot;");
 }
 
-// --- Event Wiring ---
+// --- Session Actions ---
 
-refreshDevicesBtn.onclick = () => void refreshDevices();
-deviceSelect.onchange = () => void refreshPackages();
-
-openFolderBtn.onclick = async () => {
-  try {
-    const selected = await openDialog({ directory: true, multiple: false });
-    if (typeof selected === "string" && selected) {
-      await openProjectFolder(selected);
-    }
-  } catch (err) {
-    showBanner(`Folder picker error: ${String(err)}`);
-  }
-};
-
-treeFilterInput.oninput = () => renderFileTree();
-
-async function startSession(launch: boolean) {
+async function startSession(mode: "auto" | "attach" | "launch") {
+  debugMenu.classList.add("hidden");
   hideBanner();
   const pkg = packageInput.value.trim();
   if (!pkg) {
-    showBanner("Enter or pick an Android package name first.");
+    showBanner("Select or enter an Android package name first.");
     return;
   }
   localStorage.setItem("android-lens:package", pkg);
   const serial = deviceSelect.value || null;
 
-  attachBtn.disabled = true;
-  launchBtn.disabled = true;
-  statusBadge.textContent = launch ? "Launching -D…" : "Attaching…";
+  debugAutoBtn.disabled = true;
+  debugMenuBtn.disabled = true;
+  statusText.textContent = mode === "launch" ? "Launching…" : "Connecting…";
 
   try {
     const status = await invoke<SessionStatus>("debug_attach", {
       serial,
       package: pkg,
-      launch,
+      mode,
       activity: null,
       port: 5005,
     });
     applyStatus(status);
     await refreshThreads();
-    // Automatically start package-scoped logcat stream for this app
     await startLogcat(pkg);
   } catch (err) {
     applyStatus(await invoke<SessionStatus>("debug_get_status"));
     showBanner(String(err));
+  } finally {
+    debugAutoBtn.disabled = false;
+    debugMenuBtn.disabled = false;
   }
 }
 
-attachBtn.onclick = () => void startSession(false);
-launchBtn.onclick = () => void startSession(true);
-detachBtn.onclick = async () => {
+async function detachSession() {
   hideBanner();
   const status = await invoke<SessionStatus>("debug_detach");
   applyStatus(status);
+}
+
+async function runStep(depth: "over" | "into" | "out") {
+  try {
+    await invoke("debug_step", { depth });
+  } catch (err) {
+    showBanner(String(err));
+  }
+}
+
+// --- Event Wiring ---
+
+refreshDevicesBtn.onclick = () => void refreshDevices();
+deviceSelect.onchange = () => void refreshPackages();
+packageInput.oninput = () => updateGuideChecklist();
+
+debugAutoBtn.onclick = () => void startSession("auto");
+debugMenuBtn.onclick = (e) => {
+  e.stopPropagation();
+  debugMenu.classList.toggle("hidden");
 };
+debugMenu.querySelectorAll<HTMLButtonElement>(".popover-item").forEach((item) => {
+  item.onclick = () => {
+    const mode = (item.dataset.mode as "auto" | "attach" | "launch") ?? "auto";
+    void startSession(mode);
+  };
+});
+document.addEventListener("click", () => debugMenu.classList.add("hidden"));
+
+stopRunningBtn.onclick = () => void detachSession();
+stopPausedBtn.onclick = () => void detachSession();
 
 pauseBtn.onclick = async () => {
   try {
@@ -958,20 +1158,87 @@ resumeBtn.onclick = async () => {
   }
 };
 
-async function runStep(depth: "over" | "into" | "out") {
-  try {
-    await invoke("debug_step", { depth });
-  } catch (err) {
-    showBanner(String(err));
-  }
-}
-
 stepOverBtn.onclick = () => void runStep("over");
 stepIntoBtn.onclick = () => void runStep("into");
 stepOutBtn.onclick = () => void runStep("out");
 
-// Keyboard shortcuts
+threadSelect.onchange = async () => {
+  selectedThreadId = threadSelect.value || null;
+  selectedFrameIndex = 0;
+  if (currentStatus.state === "paused" && selectedThreadId) {
+    await refreshCallStack(selectedThreadId);
+  }
+};
+
+dimSystemBtn.onclick = () => {
+  dimSystemFrames = !dimSystemFrames;
+  dimSystemBtn.classList.toggle("active", dimSystemFrames);
+  renderCallStack();
+};
+
+openFolderBtn.onclick = () => void pickFolder();
+guideOpenBtn.onclick = () => void pickFolder();
+quickOpenBtn.onclick = () => openQuickOpen();
+treeFilterInput.oninput = () => renderFileTree();
+
+toggleLeftBtn.onclick = () => toggleLeftPane();
+toggleDockBtn.onclick = () => toggleDock();
+themeToggleBtn.onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  applyTheme(cur === "dark" ? "light" : "dark");
+};
+
+// Quick Open events
+quickOpenBackdrop.onclick = (e) => {
+  if (e.target === quickOpenBackdrop) closeQuickOpen();
+};
+quickOpenInput.oninput = () => {
+  paletteIndex = 0;
+  renderPaletteResults();
+};
+quickOpenInput.onkeydown = (e) => {
+  if (e.key === "Escape") {
+    closeQuickOpen();
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (paletteMatches.length > 0) {
+      paletteIndex = (paletteIndex + 1) % paletteMatches.length;
+      renderPaletteResults();
+    }
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (paletteMatches.length > 0) {
+      paletteIndex = (paletteIndex - 1 + paletteMatches.length) % paletteMatches.length;
+      renderPaletteResults();
+    }
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const chosen = paletteMatches[paletteIndex];
+    if (chosen) {
+      closeQuickOpen();
+      void openSourceFile(chosen.abs_path);
+    }
+  }
+};
+
+// Global Keyboard Shortcuts
 window.addEventListener("keydown", (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === "p") {
+    e.preventDefault();
+    openQuickOpen();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    toggleLeftPane();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "j") {
+    e.preventDefault();
+    toggleDock();
+    return;
+  }
   if (currentStatus.state !== "paused") return;
   if (e.key === "F5") {
     e.preventDefault();
@@ -1026,8 +1293,13 @@ logcatClearBtn.onclick = async () => {
   renderCrashes();
 };
 
-// Backend event streams
+// Backend Event Streams & Init
 async function init() {
+  const savedTheme = localStorage.getItem("android-lens:theme") === "light" ? "light" : "dark";
+  applyTheme(savedTheme);
+  if (localStorage.getItem("android-lens:leftCollapsed") === "1") toggleLeftPane(true);
+  if (localStorage.getItem("android-lens:dockCollapsed") === "1") toggleDock(true);
+
   await listen<DebugUiEvent>("debug://event", async (ev) => {
     const payload = ev.payload;
     switch (payload.kind) {
@@ -1055,10 +1327,7 @@ async function init() {
         syncEditorMarkers();
         break;
       case "vm_exited":
-        showBanner("Target app process exited (VM_DEATH).", true);
-        break;
-      case "message":
-        showBanner(payload.text, true);
+        showBanner("Target app process exited.", true);
         break;
     }
   });
@@ -1077,7 +1346,7 @@ async function init() {
         logcatPidPill.textContent = `PID ${payload.pid}`;
         break;
       case "waiting_for_process":
-        logcatPidPill.textContent = "waiting…";
+        logcatPidPill.textContent = "waiting";
         break;
       case "error":
         showBanner(`Logcat error: ${payload.message}`);
@@ -1097,6 +1366,7 @@ async function init() {
       localStorage.removeItem("android-lens:projectRoot");
     }
   }
+  updateGuideChecklist();
 }
 
 void init();

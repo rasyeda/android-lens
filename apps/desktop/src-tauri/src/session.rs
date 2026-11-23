@@ -168,7 +168,7 @@ impl DebugSession {
         app: AppHandle,
         serial: Option<String>,
         package: String,
-        launch: bool,
+        mode: &str,
         activity: Option<String>,
         port: u16,
     ) -> Result<SessionStatus, String> {
@@ -179,36 +179,32 @@ impl DebugSession {
             .await
             .map_err(|e| e.to_string())?;
 
-        let pid = if launch {
-            let component = match activity.filter(|s| !s.trim().is_empty()) {
-                Some(comp) => {
-                    if comp.contains('/') {
-                        comp
-                    } else {
-                        format!("{package}/{comp}")
-                    }
-                }
-                None => adb_bridge::resolve_launcher_activity(&dev.serial, &package)
+        // In "auto" mode, attach immediately if the app is running; otherwise fresh-launch with -D.
+        let (pid, did_launch) = match mode {
+            "attach" => {
+                let pid = adb_bridge::find_package_pid(&dev.serial, &package)
                     .await
-                    .map_err(|e| e.to_string())?,
-            };
-            adb_bridge::launch_wait_for_debugger(&dev.serial, &component)
-                .await
-                .map_err(|e| format!("failed to launch '{component}': {e}"))?;
-            adb_bridge::wait_for_package_pid(&dev.serial, &package, Duration::from_secs(15))
-                .await
-                .map_err(|e| format!("timed out waiting for '{package}': {e}"))?
-        } else {
-            adb_bridge::find_package_pid(&dev.serial, &package)
-                .await
-                .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?;
+                (pid, false)
+            }
+            "launch" => {
+                let pid = launch_and_wait(&dev.serial, &package, activity).await?;
+                (pid, true)
+            }
+            _ => match adb_bridge::find_package_pid(&dev.serial, &package).await {
+                Ok(pid) => (pid, false),
+                Err(_) => {
+                    let pid = launch_and_wait(&dev.serial, &package, activity).await?;
+                    (pid, true)
+                }
+            },
         };
 
         let guard = adb_bridge::forward_jdwp(&dev.serial, port, pid)
             .await
             .map_err(|e| e.to_string())?;
 
-        let attempts = if launch { 20 } else { 3 };
+        let attempts = if did_launch { 20 } else { 3 };
         let client = Arc::new(
             connect_with_retry(&guard.local_addr(), attempts)
                 .await
@@ -222,7 +218,7 @@ impl DebugSession {
             ver.vm_name, ver.vm_version, ver.jdwp_major, ver.jdwp_minor, sizes.object_id
         );
 
-        if launch {
+        if did_launch {
             client.suspend_vm().await.map_err(|e| e.to_string())?;
         }
 
@@ -345,7 +341,7 @@ impl DebugSession {
         // Install any breakpoints that were placed before attach/launch.
         self.install_all_queued_breakpoints(&app).await;
 
-        if launch {
+        if did_launch {
             let _ = client.resume_vm().await;
         }
 
@@ -878,6 +874,31 @@ impl DebugSession {
         };
         Ok((client, tid))
     }
+}
+
+async fn launch_and_wait(
+    serial: &str,
+    package: &str,
+    activity: Option<String>,
+) -> Result<u32, String> {
+    let component = match activity.filter(|s| !s.trim().is_empty()) {
+        Some(comp) => {
+            if comp.contains('/') {
+                comp
+            } else {
+                format!("{package}/{comp}")
+            }
+        }
+        None => adb_bridge::resolve_launcher_activity(serial, package)
+            .await
+            .map_err(|e| e.to_string())?,
+    };
+    adb_bridge::launch_wait_for_debugger(serial, &component)
+        .await
+        .map_err(|e| format!("failed to launch '{component}': {e}"))?;
+    adb_bridge::wait_for_package_pid(serial, package, Duration::from_secs(15))
+        .await
+        .map_err(|e| format!("timed out waiting for '{package}': {e}"))
 }
 
 async fn connect_with_retry(addr: &str, attempts: usize) -> Result<JdwpClient, JdwpError> {

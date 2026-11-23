@@ -26,7 +26,7 @@ class BreakpointMarker extends GutterMarker {
     el.title =
       this.status === "active"
         ? "Active breakpoint (click to remove)"
-        : "Pending breakpoint — waiting for ClassPrepare (click to remove)";
+        : "Pending — waiting for class to load (click to remove)";
     return el;
   }
 }
@@ -35,7 +35,6 @@ class ExecLineMarker extends GutterMarker {
   toDOM() {
     const el = document.createElement("span");
     el.className = "exec-arrow";
-    el.textContent = "▶";
     el.title = "Paused execution line";
     return el;
   }
@@ -109,17 +108,18 @@ const execLineField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-const darkHighlight = HighlightStyle.define([
-  { tag: tags.keyword, color: "#c792ea" },
-  { tag: [tags.name, tags.deleted, tags.character, tags.macroName], color: "#dce3ee" },
-  { tag: [tags.function(tags.variableName), tags.labelName], color: "#82aaff" },
-  { tag: [tags.color, tags.constant(tags.name), tags.standard(tags.name)], color: "#f78c6c" },
-  { tag: [tags.definition(tags.name), tags.separator], color: "#dce3ee" },
-  { tag: [tags.typeName, tags.className, tags.number, tags.changed, tags.annotation], color: "#ffcb6b" },
-  { tag: [tags.operator, tags.operatorKeyword], color: "#89ddff" },
-  { tag: [tags.string, tags.meta, tags.regexp], color: "#c3e88d" },
-  { tag: tags.comment, color: "#607089", fontStyle: "italic" },
-  { tag: tags.atom, color: "#f78c6c" },
+// CSS-variable backed highlight style so Dark/Light switching is instant
+const semanticHighlight = HighlightStyle.define([
+  { tag: tags.keyword, color: "var(--al-syn-kw)" },
+  { tag: [tags.name, tags.deleted, tags.character, tags.macroName], color: "var(--al-text)" },
+  { tag: [tags.function(tags.variableName), tags.labelName], color: "var(--al-syn-fn)" },
+  { tag: [tags.color, tags.constant(tags.name), tags.standard(tags.name)], color: "var(--al-syn-num)" },
+  { tag: [tags.definition(tags.name), tags.separator], color: "var(--al-text)" },
+  { tag: [tags.typeName, tags.className, tags.changed, tags.annotation], color: "var(--al-syn-type)" },
+  { tag: [tags.number, tags.atom], color: "var(--al-syn-num)" },
+  { tag: [tags.operator, tags.operatorKeyword], color: "var(--al-syn-op)" },
+  { tag: [tags.string, tags.meta, tags.regexp], color: "var(--al-syn-str)" },
+  { tag: tags.comment, color: "var(--al-syn-comment)", fontStyle: "italic" },
 ]);
 
 export class SourceViewer {
@@ -180,7 +180,7 @@ export class SourceViewer {
         bpGutter,
         execGutter,
         lineNumbers(),
-        syntaxHighlighting(darkHighlight),
+        syntaxHighlighting(semanticHighlight),
         ...langExt,
       ],
     });

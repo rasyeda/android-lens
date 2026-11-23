@@ -32,6 +32,75 @@ pub struct SourceFileContent {
     pub language: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectFile {
+    pub name: String,
+    pub rel_path: String,
+    pub abs_path: String,
+}
+
+const QUICK_OPEN_EXTS: &[&str] = &[
+    "kt",
+    "kts",
+    "java",
+    "xml",
+    "gradle",
+    "json",
+    "toml",
+    "properties",
+    "md",
+];
+
+pub fn list_project_files(project_root: &str) -> Result<Vec<ProjectFile>, String> {
+    let root = Path::new(project_root);
+    if !root.is_dir() {
+        return Err(format!("'{project_root}' is not a directory"));
+    }
+    let mut out = Vec::new();
+    collect_quick_open_files(root, root, 0, &mut out);
+    out.sort_by_key(|f| f.name.to_lowercase());
+    Ok(out)
+}
+
+fn collect_quick_open_files(root: &Path, dir: &Path, depth: usize, out: &mut Vec<ProjectFile>) {
+    if depth > 14 || out.len() >= 2000 {
+        return;
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            if !IGNORED_DIRS.contains(&name.as_str()) {
+                collect_quick_open_files(root, &path, depth + 1, out);
+            }
+        } else {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if QUICK_OPEN_EXTS.contains(&ext.as_str()) {
+                let rel_path = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push(ProjectFile {
+                    name,
+                    rel_path,
+                    abs_path: path.to_string_lossy().to_string(),
+                });
+            }
+        }
+    }
+}
+
 pub fn list_dir(dir: &str) -> Result<Vec<FsEntry>, String> {
     let path = Path::new(dir);
     let read = fs::read_dir(path).map_err(|e| format!("failed to read '{dir}': {e}"))?;
