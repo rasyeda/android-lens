@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/adb-bridge",
+    "crates/jdwp-client",
+    "crates/cli-poc",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
