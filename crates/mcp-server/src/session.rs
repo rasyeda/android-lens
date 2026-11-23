@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,11 +11,22 @@ use jdwp_client::{
     pretty_signature, root_package_prefix, InspectedObject, JdwpClient, StepDepth,
     DEFAULT_CLASS_EXCLUDES,
 };
-use serde::Serialize;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, Mutex};
 
-#[derive(Debug, Clone, Serialize)]
+const IGNORED_DIRS: &[&str] = &[
+    ".git",
+    ".gradle",
+    ".idea",
+    ".kotlin",
+    "build",
+    "node_modules",
+    "target",
+    ".cxx",
+    ".dart_tool",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStatus {
     pub state: String, // "disconnected" | "running" | "paused"
     pub serial: Option<String>,
@@ -24,7 +38,7 @@ pub struct SessionStatus {
     pub paused_location: Option<LocationDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocationDto {
     pub class_name: String,
     pub method_name: String,
@@ -32,7 +46,7 @@ pub struct LocationDto {
     pub line_number: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BreakpointDto {
     pub id: String,
     pub file: String,
@@ -43,14 +57,14 @@ pub struct BreakpointDto {
     pub request_ids: Vec<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadDto {
     pub id_hex: String,
     pub name: String,
     pub is_paused: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackFrameDto {
     pub index: usize,
     pub frame_id_hex: String,
@@ -60,7 +74,7 @@ pub struct StackFrameDto {
     pub line_number: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariableDto {
     pub name: String,
     pub type_name: String,
@@ -71,9 +85,31 @@ pub struct VariableDto {
     pub declaring_class: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InspectedNode {
+    pub name: String,
+    pub type_name: String,
+    pub value: String,
+    pub object_id_hex: Option<String>,
+    pub is_static: bool,
+    pub declaring_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<InspectedNode>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceSnippet {
+    pub path: String,
+    pub file_name: String,
+    pub focus_line: i32,
+    pub start_line: i32,
+    pub end_line: i32,
+    pub lines: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DebugUiEvent {
+pub enum DebugCoreEvent {
     StatusChanged {
         status: SessionStatus,
     },
@@ -145,14 +181,34 @@ impl InnerState {
     }
 }
 
-#[derive(Clone, Default)]
+/// Shared live JDWP debugger session driving both the Tauri v2 Desktop UI and the local MCP server.
+#[derive(Clone)]
 pub struct DebugSession {
     inner: Arc<Mutex<InnerState>>,
+    events_tx: broadcast::Sender<DebugCoreEvent>,
+}
+
+impl Default for DebugSession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DebugSession {
     pub fn new() -> Self {
-        Self::default()
+        let (events_tx, _) = broadcast::channel(128);
+        Self {
+            inner: Arc::new(Mutex::new(InnerState::default())),
+            events_tx,
+        }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<DebugCoreEvent> {
+        self.events_tx.subscribe()
+    }
+
+    fn emit(&self, ev: DebugCoreEvent) {
+        let _ = self.events_tx.send(ev);
     }
 
     pub async fn status(&self) -> SessionStatus {
@@ -165,21 +221,18 @@ impl DebugSession {
 
     pub async fn attach(
         &self,
-        app: AppHandle,
         serial: Option<String>,
         package: String,
         mode: &str,
         activity: Option<String>,
         port: u16,
     ) -> Result<SessionStatus, String> {
-        // Tear down any existing session cleanly first.
-        let _ = self.detach(&app).await;
+        let _ = self.detach().await;
 
         let dev = adb_bridge::resolve_device(serial.as_deref())
             .await
             .map_err(|e| e.to_string())?;
 
-        // In "auto" mode, attach immediately if the app is running; otherwise fresh-launch with -D.
         let (pid, did_launch) = match mode {
             "attach" => {
                 let pid = adb_bridge::find_package_pid(&dev.serial, &package)
@@ -225,7 +278,7 @@ impl DebugSession {
         let mut events_rx = client.subscribe_events();
         let inner_ev = Arc::clone(&self.inner);
         let client_ev = Arc::clone(&client);
-        let app_ev = app.clone();
+        let tx_ev = self.events_tx.clone();
 
         let event_task = tokio::spawn(async move {
             while let Ok(comp) = events_rx.recv().await {
@@ -241,7 +294,7 @@ impl DebugSession {
                         } => {
                             should_stay_paused = true;
                             handle_pause_event(
-                                &app_ev,
+                                &tx_ev,
                                 &inner_ev,
                                 &client_ev,
                                 "breakpoint",
@@ -257,7 +310,7 @@ impl DebugSession {
                         } => {
                             should_stay_paused = true;
                             handle_pause_event(
-                                &app_ev, &inner_ev, &client_ev, "step", thread_id, location,
+                                &tx_ev, &inner_ev, &client_ev, "step", thread_id, location,
                             )
                             .await;
                         }
@@ -268,7 +321,7 @@ impl DebugSession {
                         } => {
                             should_stay_paused = true;
                             handle_pause_event(
-                                &app_ev,
+                                &tx_ev,
                                 &inner_ev,
                                 &client_ev,
                                 "exception",
@@ -285,7 +338,7 @@ impl DebugSession {
                         } => {
                             saw_class_prepare = true;
                             resolve_pending_for_class(
-                                &app_ev,
+                                &tx_ev,
                                 &inner_ev,
                                 &client_ev,
                                 ref_type_tag,
@@ -307,9 +360,8 @@ impl DebugSession {
                                 }
                                 st.status()
                             };
-                            let _ = app_ev.emit("debug://event", DebugUiEvent::VmExited);
-                            let _ = app_ev
-                                .emit("debug://event", DebugUiEvent::StatusChanged { status });
+                            let _ = tx_ev.send(DebugCoreEvent::VmExited);
+                            let _ = tx_ev.send(DebugCoreEvent::StatusChanged { status });
                         }
                         _ => {}
                     }
@@ -338,24 +390,20 @@ impl DebugSession {
             });
         }
 
-        // Install any breakpoints that were placed before attach/launch.
-        self.install_all_queued_breakpoints(&app).await;
+        self.install_all_queued_breakpoints().await;
 
         if did_launch {
             let _ = client.resume_vm().await;
         }
 
         let status = self.status().await;
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::StatusChanged {
-                status: status.clone(),
-            },
-        );
+        self.emit(DebugCoreEvent::StatusChanged {
+            status: status.clone(),
+        });
         Ok(status)
     }
 
-    pub async fn detach(&self, app: &AppHandle) -> Result<SessionStatus, String> {
+    pub async fn detach(&self) -> Result<SessionStatus, String> {
         let conn = {
             let mut st = self.inner.lock().await;
             st.paused_thread_id = None;
@@ -376,35 +424,22 @@ impl DebugSession {
 
         let status = self.status().await;
         let bps = self.list_breakpoints().await;
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::BreakpointsChanged { breakpoints: bps },
-        );
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::StatusChanged {
-                status: status.clone(),
-            },
-        );
+        self.emit(DebugCoreEvent::BreakpointsChanged { breakpoints: bps });
+        self.emit(DebugCoreEvent::StatusChanged {
+            status: status.clone(),
+        });
         Ok(status)
     }
 
-    pub async fn toggle_breakpoint(
-        &self,
-        app: &AppHandle,
-        file: String,
-        line: i32,
-    ) -> Result<Vec<BreakpointDto>, String> {
-        let existing_id = {
+    pub async fn set_breakpoint(&self, file: String, line: i32) -> Result<BreakpointDto, String> {
+        if let Some(existing) = {
             let st = self.inner.lock().await;
             st.breakpoints
                 .iter()
                 .find(|bp| bp.file.eq_ignore_ascii_case(&file) && bp.line == line)
-                .map(|bp| bp.id.clone())
-        };
-
-        if let Some(id) = existing_id {
-            return self.remove_breakpoint(app, &id).await;
+                .cloned()
+        } {
+            return Ok(existing);
         }
 
         let bp_id = {
@@ -436,20 +471,55 @@ impl DebugSession {
         }
 
         let bps = self.list_breakpoints().await;
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::BreakpointsChanged {
-                breakpoints: bps.clone(),
-            },
-        );
-        Ok(bps)
+        let created = bps
+            .iter()
+            .find(|b| b.id == bp_id)
+            .cloned()
+            .ok_or_else(|| "breakpoint disappeared".to_string())?;
+        self.emit(DebugCoreEvent::BreakpointsChanged { breakpoints: bps });
+        Ok(created)
     }
 
-    pub async fn remove_breakpoint(
+    pub async fn toggle_breakpoint(
         &self,
-        app: &AppHandle,
-        bp_id: &str,
+        file: String,
+        line: i32,
     ) -> Result<Vec<BreakpointDto>, String> {
+        let existing_id = {
+            let st = self.inner.lock().await;
+            st.breakpoints
+                .iter()
+                .find(|bp| bp.file.eq_ignore_ascii_case(&file) && bp.line == line)
+                .map(|bp| bp.id.clone())
+        };
+
+        if let Some(id) = existing_id {
+            return self.remove_breakpoint(&id).await;
+        }
+
+        self.set_breakpoint(file, line).await?;
+        Ok(self.list_breakpoints().await)
+    }
+
+    pub async fn remove_breakpoint_by_location(
+        &self,
+        file: &str,
+        line: i32,
+    ) -> Result<Vec<BreakpointDto>, String> {
+        let existing_id = {
+            let st = self.inner.lock().await;
+            st.breakpoints
+                .iter()
+                .find(|bp| bp.file.eq_ignore_ascii_case(file) && bp.line == line)
+                .map(|bp| bp.id.clone())
+        };
+        if let Some(id) = existing_id {
+            return self.remove_breakpoint(&id).await;
+        }
+        Ok(self.list_breakpoints().await)
+    }
+
+    pub async fn remove_breakpoint(&self, bp_id: &str) -> Result<Vec<BreakpointDto>, String> {
         let (client_opt, req_ids, clear_cp) = {
             let mut st = self.inner.lock().await;
             let mut req_ids = Vec::new();
@@ -481,16 +551,13 @@ impl DebugSession {
         }
 
         let bps = self.list_breakpoints().await;
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::BreakpointsChanged {
-                breakpoints: bps.clone(),
-            },
-        );
+        self.emit(DebugCoreEvent::BreakpointsChanged {
+            breakpoints: bps.clone(),
+        });
         Ok(bps)
     }
 
-    async fn install_all_queued_breakpoints(&self, app: &AppHandle) {
+    async fn install_all_queued_breakpoints(&self) {
         let (client, package, pending) = {
             let st = self.inner.lock().await;
             let Some(ref c) = st.conn else { return };
@@ -509,10 +576,7 @@ impl DebugSession {
         }
 
         let bps = self.list_breakpoints().await;
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::BreakpointsChanged { breakpoints: bps },
-        );
+        self.emit(DebugCoreEvent::BreakpointsChanged { breakpoints: bps });
     }
 
     async fn resolve_and_install_single(
@@ -575,11 +639,10 @@ impl DebugSession {
         Ok(())
     }
 
-    pub async fn pause(&self, app: &AppHandle) -> Result<SessionStatus, String> {
+    pub async fn pause(&self) -> Result<SessionStatus, String> {
         let client = self.active_client().await?;
         client.suspend_vm().await.map_err(|e| e.to_string())?;
 
-        // Pick the main thread (or first thread) so user can inspect call stack on manual pause.
         let threads = client.all_threads().await.unwrap_or_default();
         let mut chosen = None;
         for tid in &threads {
@@ -602,16 +665,13 @@ impl DebugSession {
             }
             st.status()
         };
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::StatusChanged {
-                status: status.clone(),
-            },
-        );
+        self.emit(DebugCoreEvent::StatusChanged {
+            status: status.clone(),
+        });
         Ok(status)
     }
 
-    pub async fn resume(&self, app: &AppHandle) -> Result<SessionStatus, String> {
+    pub async fn resume(&self) -> Result<SessionStatus, String> {
         let client = self.active_client().await?;
         {
             let mut st = self.inner.lock().await;
@@ -621,17 +681,14 @@ impl DebugSession {
         }
         client.resume_vm().await.map_err(|e| e.to_string())?;
         let status = self.status().await;
-        let _ = app.emit("debug://event", DebugUiEvent::Resumed);
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::StatusChanged {
-                status: status.clone(),
-            },
-        );
+        self.emit(DebugCoreEvent::Resumed);
+        self.emit(DebugCoreEvent::StatusChanged {
+            status: status.clone(),
+        });
         Ok(status)
     }
 
-    pub async fn step(&self, app: &AppHandle, depth: StepDepth) -> Result<(), String> {
+    pub async fn step(&self, depth: StepDepth) -> Result<(), String> {
         let (client, tid) = {
             let mut st = self.inner.lock().await;
             let client = st
@@ -657,8 +714,8 @@ impl DebugSession {
         }
 
         let status = self.status().await;
-        let _ = app.emit("debug://event", DebugUiEvent::Resumed);
-        let _ = app.emit("debug://event", DebugUiEvent::StatusChanged { status });
+        self.emit(DebugCoreEvent::Resumed);
+        self.emit(DebugCoreEvent::StatusChanged { status });
         Ok(())
     }
 
@@ -686,7 +743,6 @@ impl DebugSession {
                 is_paused: paused_id == Some(tid),
             });
         }
-        // Put paused thread and `main` at the top for quick visibility.
         out.sort_by_key(|t| (!t.is_paused, t.name != "main", t.name.clone()));
         Ok(out)
     }
@@ -785,13 +841,7 @@ impl DebugSession {
 
     pub async fn inspect_object(&self, object_id_hex: &str) -> Result<Vec<VariableDto>, String> {
         let client = self.active_client().await?;
-        let hex = object_id_hex
-            .trim()
-            .strip_prefix("0x")
-            .or_else(|| object_id_hex.trim().strip_prefix("0X"))
-            .unwrap_or(object_id_hex.trim());
-        let obj_id = u64::from_str_radix(hex, 16)
-            .map_err(|e| format!("invalid object id '{object_id_hex}': {e}"))?;
+        let obj_id = parse_hex_id(object_id_hex)?;
 
         match client
             .inspect_object(obj_id, 100)
@@ -838,6 +888,22 @@ impl DebugSession {
         }
     }
 
+    /// Recursively expands an object/array up to `depth` levels (capped at 3) with cycle protection.
+    pub async fn inspect_object_depth(
+        &self,
+        object_id_hex: &str,
+        depth: usize,
+        max_array_elements: usize,
+    ) -> Result<Vec<InspectedNode>, String> {
+        let client = self.active_client().await?;
+        let obj_id = parse_hex_id(object_id_hex)?;
+        let depth = depth.clamp(1, 3);
+        let max_arr = max_array_elements.clamp(1, 100);
+        let mut visited = HashSet::new();
+        visited.insert(obj_id);
+        inspect_recursive(&client, obj_id, depth, max_arr, &mut visited).await
+    }
+
     async fn active_client(&self) -> Result<Arc<JdwpClient>, String> {
         self.inner
             .lock()
@@ -859,20 +925,208 @@ impl DebugSession {
             .map(|c| Arc::clone(&c.client))
             .ok_or_else(|| "not attached".to_string())?;
         let tid = match thread_id_hex {
-            Some(ref h) => {
-                let clean = h
-                    .trim()
-                    .strip_prefix("0x")
-                    .or_else(|| h.trim().strip_prefix("0X"))
-                    .unwrap_or(h.trim());
-                u64::from_str_radix(clean, 16)
-                    .map_err(|e| format!("invalid thread id '{h}': {e}"))?
-            }
+            Some(ref h) => parse_hex_id(h)?,
             None => st
                 .paused_thread_id
                 .ok_or_else(|| "no paused thread".to_string())?,
         };
         Ok((client, tid))
+    }
+}
+
+fn inspect_recursive<'a>(
+    client: &'a JdwpClient,
+    object_id: u64,
+    remaining_depth: usize,
+    max_array_elements: usize,
+    visited: &'a mut HashSet<u64>,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Vec<InspectedNode>, String>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let inspected = client
+            .inspect_object(object_id, max_array_elements)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let raw_items: Vec<(String, String, JdwpValue, bool, Option<String>)> = match inspected {
+            InspectedObject::Array { elements, .. } => elements
+                .into_iter()
+                .enumerate()
+                .map(|(i, val)| (format!("[{i}]"), String::new(), val, false, None))
+                .collect(),
+            InspectedObject::Object { signature, fields } => {
+                let root = pretty_signature(&signature);
+                fields
+                    .into_iter()
+                    .map(|f| {
+                        let owner = pretty_signature(&f.declaring_class);
+                        let declaring = if owner != root { Some(owner) } else { None };
+                        (
+                            f.name,
+                            pretty_signature(&f.signature),
+                            f.value,
+                            f.is_static,
+                            declaring,
+                        )
+                    })
+                    .collect()
+            }
+        };
+
+        let mut nodes = Vec::with_capacity(raw_items.len());
+        for (name, type_name, val, is_static, declaring_class) in raw_items {
+            let formatted = client.format_value(&val).await;
+            let (object_id_hex, child_id) = match val {
+                JdwpValue::Object { tag, id } if id != 0 => {
+                    (Some(format!("0x{id:x}")), (tag != b's').then_some(id))
+                }
+                _ => (None, None),
+            };
+
+            let children = if remaining_depth > 1 {
+                if let Some(cid) = child_id {
+                    if visited.insert(cid) {
+                        inspect_recursive(
+                            client,
+                            cid,
+                            remaining_depth - 1,
+                            max_array_elements.min(20),
+                            visited,
+                        )
+                        .await
+                        .ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            nodes.push(InspectedNode {
+                name,
+                type_name,
+                value: formatted,
+                object_id_hex,
+                is_static,
+                declaring_class,
+                children,
+            });
+        }
+        Ok(nodes)
+    })
+}
+
+pub fn parse_hex_id(raw: &str) -> Result<u64, String> {
+    let token = raw
+        .trim()
+        .rsplit_once('@')
+        .map(|(_, rhs)| rhs)
+        .unwrap_or(raw.trim());
+    let hex = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+        .unwrap_or(token);
+    u64::from_str_radix(hex, 16).map_err(|e| format!("invalid hex id '{raw}': {e}"))
+}
+
+/// Reads a formatted snippet (±`context_lines`) around `focus_line` for a source file inside `project_root`.
+pub fn read_source_snippet(
+    project_root: &str,
+    file_name: &str,
+    class_hint: Option<&str>,
+    focus_line: i32,
+    context_lines: i32,
+) -> Option<SourceSnippet> {
+    let abs = find_source_file(project_root, file_name, class_hint)?;
+    let content = fs::read_to_string(&abs).ok()?;
+    let all_lines: Vec<&str> = content.lines().collect();
+    if all_lines.is_empty() || focus_line <= 0 {
+        return None;
+    }
+
+    let ctx = context_lines.clamp(1, 30);
+    let start = (focus_line - ctx).max(1);
+    let end = (focus_line + ctx).min(all_lines.len() as i32);
+    let mut lines = Vec::with_capacity((end - start + 1) as usize);
+    for ln in start..=end {
+        let marker = if ln == focus_line { ">" } else { " " };
+        let text = all_lines[(ln - 1) as usize];
+        lines.push(format!("{marker} {ln:>4} | {text}"));
+    }
+
+    Some(SourceSnippet {
+        path: abs,
+        file_name: file_name.to_string(),
+        focus_line,
+        start_line: start,
+        end_line: end,
+        lines,
+    })
+}
+
+pub fn find_source_file(
+    project_root: &str,
+    file_name: &str,
+    class_hint: Option<&str>,
+) -> Option<String> {
+    let mut matches: Vec<PathBuf> = Vec::new();
+    collect_matching_files(Path::new(project_root), file_name, 0, &mut matches);
+    if matches.is_empty() {
+        return None;
+    }
+    if matches.len() == 1 {
+        return Some(matches[0].to_string_lossy().to_string());
+    }
+
+    if let Some(cls) = class_hint {
+        let pkg_path = cls
+            .rsplit_once('.')
+            .map(|(pkg, _)| pkg.replace('.', "/"))
+            .unwrap_or_default();
+        if !pkg_path.is_empty() {
+            if let Some(best) = matches
+                .iter()
+                .find(|p| p.to_string_lossy().replace('\\', "/").contains(&pkg_path))
+            {
+                return Some(best.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    if let Some(best) = matches.iter().find(|p| {
+        let s = p.to_string_lossy().replace('\\', "/");
+        s.contains("/src/main/") && !s.contains("/.claude/")
+    }) {
+        return Some(best.to_string_lossy().to_string());
+    }
+
+    Some(matches[0].to_string_lossy().to_string())
+}
+
+fn collect_matching_files(dir: &Path, target_name: &str, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > 14 || out.len() >= 16 {
+        return;
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            if !IGNORED_DIRS.contains(&name.as_str()) {
+                collect_matching_files(&path, target_name, depth + 1, out);
+            }
+        } else if name.eq_ignore_ascii_case(target_name) {
+            out.push(path);
+        }
     }
 }
 
@@ -919,7 +1173,7 @@ async fn connect_with_retry(addr: &str, attempts: usize) -> Result<JdwpClient, J
 }
 
 async fn handle_pause_event(
-    app: &AppHandle,
+    tx: &broadcast::Sender<DebugCoreEvent>,
     inner: &Arc<Mutex<InnerState>>,
     client: &JdwpClient,
     reason: &str,
@@ -940,20 +1194,17 @@ async fn handle_pause_event(
         st.status()
     };
 
-    let _ = app.emit(
-        "debug://event",
-        DebugUiEvent::Paused {
-            reason: reason.to_string(),
-            thread_id_hex: format!("0x{thread_id:x}"),
-            thread_name: tname,
-            location: loc_dto,
-        },
-    );
-    let _ = app.emit("debug://event", DebugUiEvent::StatusChanged { status });
+    let _ = tx.send(DebugCoreEvent::Paused {
+        reason: reason.to_string(),
+        thread_id_hex: format!("0x{thread_id:x}"),
+        thread_name: tname,
+        location: loc_dto,
+    });
+    let _ = tx.send(DebugCoreEvent::StatusChanged { status });
 }
 
 async fn resolve_pending_for_class(
-    app: &AppHandle,
+    tx: &broadcast::Sender<DebugCoreEvent>,
     inner: &Arc<Mutex<InnerState>>,
     client: &JdwpClient,
     ref_type_tag: u8,
@@ -1021,10 +1272,7 @@ async fn resolve_pending_for_class(
         if let Some(cp_id) = clear_cp {
             let _ = client.clear_event_request(EVENT_CLASS_PREPARE, cp_id).await;
         }
-        let _ = app.emit(
-            "debug://event",
-            DebugUiEvent::BreakpointsChanged { breakpoints: bps },
-        );
+        let _ = tx.send(DebugCoreEvent::BreakpointsChanged { breakpoints: bps });
     }
 }
 

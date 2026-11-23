@@ -49,6 +49,7 @@ dependencies = [
  "anyhow",
  "jdwp-client",
  "logcat-stream",
+ "mcp-server",
  "serde",
  "serde_json",
  "tauri",
@@ -2040,6 +2041,20 @@ dependencies = [
  "log",
  "tendril",
  "web_atoms 0.3.0",
+]
+
+[[package]]
+name = "mcp-server"
+version = "0.1.0"
+dependencies = [
+ "adb-bridge",
+ "anyhow",
+ "clap",
+ "jdwp-client",
+ "logcat-stream",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

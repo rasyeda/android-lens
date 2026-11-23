@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 adb-bridge = { path = "../../../crates/adb-bridge" }
 jdwp-client = { path = "../../../crates/jdwp-client" }
 logcat-stream = { path = "../../../crates/logcat-stream" }
+mcp-server = { path = "../../../crates/mcp-server" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

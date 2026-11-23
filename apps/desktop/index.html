@@ -130,6 +130,24 @@
             <span class="status-dot"></span>
             <span id="status-text">Ready</span>
           </span>
+          <div class="mcp-wrap">
+            <button id="mcp-pill-btn" class="btn btn-mcp" title="Local MCP server for Claude Code &amp; Antigravity">
+              <span class="mcp-dot"></span>
+              <span id="mcp-pill-text">MCP</span>
+            </button>
+            <div id="mcp-popover" class="popover popover-right hidden">
+              <div class="mcp-pop-head">
+                <span class="popover-title">MCP Bridge</span>
+                <span id="mcp-pop-endpoint" class="mcp-endpoint">127.0.0.1:43821</span>
+              </div>
+              <div class="popover-desc">Add to Claude Code or Antigravity MCP config to share this live debug session &amp; pinned context:</div>
+              <pre id="mcp-snippet" class="mcp-snippet"></pre>
+              <div class="mcp-pop-actions">
+                <button id="mcp-copy-btn" class="btn btn-primary btn-xs-h">Copy config</button>
+                <span id="mcp-copy-feedback" class="muted"></span>
+              </div>
+            </div>
+          </div>
           <div class="toolbar-sep"></div>
           <button id="toggle-left-btn" class="btn btn-icon active" title="Toggle files panel (⌘B)" aria-label="Toggle files">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
@@ -254,6 +272,10 @@
               <span>Breakpoints</span>
               <span id="bps-count" class="pill">0</span>
             </button>
+            <button class="dock-tab" data-tab="pinned">
+              <span>Pinned</span>
+              <span id="pins-count" class="pill pill-ai">0</span>
+            </button>
           </div>
 
           <div id="logcat-controls" class="dock-controls">
@@ -274,6 +296,11 @@
             <button id="logcat-toggle-btn" class="btn btn-ghost-xs">Start</button>
             <button id="logcat-clear-btn" class="btn btn-ghost-xs">Clear</button>
           </div>
+
+          <div id="pinned-controls" class="dock-controls hidden">
+            <span class="muted small-hint">Exposed via <code>get_pinned_context()</code></span>
+            <button id="pins-clear-btn" class="btn btn-ghost-xs">Clear all</button>
+          </div>
         </div>
 
         <div id="tab-logcat" class="dock-panel active">
@@ -291,6 +318,12 @@
         <div id="tab-breakpoints" class="dock-panel">
           <div id="breakpoints-list" class="breakpoints-list">
             <div class="empty-hint">Click the gutter next to any source line to add a breakpoint</div>
+          </div>
+        </div>
+
+        <div id="tab-pinned" class="dock-panel">
+          <div id="pinned-list" class="pinned-list">
+            <div class="empty-hint">Hover any variable, stack frame, logcat line, or crash and click Pin to share it with your AI agent</div>
           </div>
         </div>
       </footer>

@@ -1,31 +1,33 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod files;
-mod session;
 
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
 use adb_bridge::AdbDevice;
 use jdwp_client::StepDepth;
-use logcat_stream::{
-    CrashGroup, LogEntry, LogFilter, LogLevel, LogcatStream, DEFAULT_RING_CAPACITY,
-};
-use tauri::{AppHandle, Emitter, State};
-use tokio::sync::Mutex;
+use logcat_stream::{CrashGroup, LogEntry, LogLevel};
+use mcp_server::http::spawn_http_mcp_server;
+use mcp_server::pins::{NewPinRequest, PinnedItem};
+use mcp_server::session::{BreakpointDto, SessionStatus, StackFrameDto, ThreadDto, VariableDto};
+use mcp_server::{SharedLensState, DEFAULT_MCP_PORT};
+use serde::Serialize;
+use tauri::{Emitter, State};
 
 use crate::files::{FsEntry, ProjectFile, SourceFileContent};
-use crate::session::{
-    BreakpointDto, DebugSession, SessionStatus, StackFrameDto, ThreadDto, VariableDto,
-};
-
-struct LogcatState {
-    stream: Option<LogcatStream>,
-    forward_task: Option<tokio::task::JoinHandle<()>>,
-}
 
 struct AppState {
-    debug: DebugSession,
-    logcat: Arc<Mutex<LogcatState>>,
+    shared: Arc<SharedLensState>,
+    mcp_port: Arc<AtomicU16>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct McpStatusDto {
+    running: bool,
+    port: u16,
+    endpoint: String,
+    pinned_count: usize,
 }
 
 #[tauri::command]
@@ -58,7 +60,6 @@ async fn adb_resolve_launcher(serial: Option<String>, package: String) -> Result
 
 #[tauri::command]
 async fn debug_attach(
-    app: AppHandle,
     state: State<'_, AppState>,
     serial: Option<String>,
     package: String,
@@ -67,9 +68,9 @@ async fn debug_attach(
     port: Option<u16>,
 ) -> Result<SessionStatus, String> {
     state
+        .shared
         .debug
         .attach(
-            app,
             serial,
             package,
             mode.as_deref().unwrap_or("auto"),
@@ -80,67 +81,61 @@ async fn debug_attach(
 }
 
 #[tauri::command]
-async fn debug_detach(app: AppHandle, state: State<'_, AppState>) -> Result<SessionStatus, String> {
-    state.debug.detach(&app).await
+async fn debug_detach(state: State<'_, AppState>) -> Result<SessionStatus, String> {
+    state.shared.debug.detach().await
 }
 
 #[tauri::command]
 async fn debug_get_status(state: State<'_, AppState>) -> Result<SessionStatus, String> {
-    Ok(state.debug.status().await)
+    Ok(state.shared.debug.status().await)
 }
 
 #[tauri::command]
-async fn debug_pause(app: AppHandle, state: State<'_, AppState>) -> Result<SessionStatus, String> {
-    state.debug.pause(&app).await
+async fn debug_pause(state: State<'_, AppState>) -> Result<SessionStatus, String> {
+    state.shared.debug.pause().await
 }
 
 #[tauri::command]
-async fn debug_resume(app: AppHandle, state: State<'_, AppState>) -> Result<SessionStatus, String> {
-    state.debug.resume(&app).await
+async fn debug_resume(state: State<'_, AppState>) -> Result<SessionStatus, String> {
+    state.shared.debug.resume().await
 }
 
 #[tauri::command]
-async fn debug_step(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    depth: String,
-) -> Result<(), String> {
+async fn debug_step(state: State<'_, AppState>, depth: String) -> Result<(), String> {
     let d = match depth.as_str() {
         "over" => StepDepth::Over,
         "into" => StepDepth::Into,
         "out" => StepDepth::Out,
         other => return Err(format!("unknown step depth '{other}'")),
     };
-    state.debug.step(&app, d).await
+    state.shared.debug.step(d).await
 }
 
 #[tauri::command]
 async fn debug_toggle_breakpoint(
-    app: AppHandle,
     state: State<'_, AppState>,
     file: String,
     line: i32,
 ) -> Result<Vec<BreakpointDto>, String> {
-    state.debug.toggle_breakpoint(&app, file, line).await
+    state.shared.debug.toggle_breakpoint(file, line).await
 }
 
 #[tauri::command]
 async fn debug_list_breakpoints(state: State<'_, AppState>) -> Result<Vec<BreakpointDto>, String> {
-    Ok(state.debug.list_breakpoints().await)
+    Ok(state.shared.debug.list_breakpoints().await)
 }
 
 #[tauri::command]
 async fn debug_remove_breakpoint(
-    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Vec<BreakpointDto>, String> {
-    state.debug.remove_breakpoint(&app, &id).await
+    state.shared.debug.remove_breakpoint(&id).await
 }
 
 #[tauri::command]
 async fn debug_list_threads(state: State<'_, AppState>) -> Result<Vec<ThreadDto>, String> {
-    state.debug.list_threads().await
+    state.shared.debug.list_threads().await
 }
 
 #[tauri::command]
@@ -148,7 +143,7 @@ async fn debug_get_call_stack(
     state: State<'_, AppState>,
     thread_id_hex: Option<String>,
 ) -> Result<Vec<StackFrameDto>, String> {
-    state.debug.get_call_stack(thread_id_hex).await
+    state.shared.debug.get_call_stack(thread_id_hex).await
 }
 
 #[tauri::command]
@@ -158,6 +153,7 @@ async fn debug_get_locals(
     frame_index: usize,
 ) -> Result<Vec<VariableDto>, String> {
     state
+        .shared
         .debug
         .get_frame_locals(thread_id_hex, frame_index)
         .await
@@ -168,7 +164,16 @@ async fn debug_inspect_object(
     state: State<'_, AppState>,
     object_id_hex: String,
 ) -> Result<Vec<VariableDto>, String> {
-    state.debug.inspect_object(&object_id_hex).await
+    state.shared.debug.inspect_object(&object_id_hex).await
+}
+
+#[tauri::command]
+async fn fs_set_project_root(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<(), String> {
+    state.shared.set_project_root(path);
+    Ok(())
 }
 
 #[tauri::command]
@@ -201,54 +206,22 @@ async fn fs_find_source_file(
 
 #[tauri::command]
 async fn logcat_start(
-    app: AppHandle,
     state: State<'_, AppState>,
     serial: Option<String>,
     package: String,
 ) -> Result<(), String> {
-    let dev = adb_bridge::resolve_device(serial.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let mut lc = state.logcat.lock().await;
-    if let Some(old_task) = lc.forward_task.take() {
-        old_task.abort();
-    }
-    if let Some(old_stream) = lc.stream.take() {
-        old_stream.stop();
-    }
-
-    let stream = LogcatStream::start(dev.serial, package, DEFAULT_RING_CAPACITY);
-    let mut rx = stream.subscribe();
-    let app_ev = app.clone();
-    let task = tokio::spawn(async move {
-        while let Ok(ev) = rx.recv().await {
-            let _ = app_ev.emit("logcat://event", ev);
-        }
-    });
-
-    lc.stream = Some(stream);
-    lc.forward_task = Some(task);
-    Ok(())
+    state.shared.start_logcat(serial, package).await
 }
 
 #[tauri::command]
 async fn logcat_stop(state: State<'_, AppState>) -> Result<(), String> {
-    let mut lc = state.logcat.lock().await;
-    if let Some(task) = lc.forward_task.take() {
-        task.abort();
-    }
-    if let Some(stream) = lc.stream.take() {
-        stream.stop();
-    }
+    state.shared.stop_logcat().await;
     Ok(())
 }
 
 #[tauri::command]
 async fn logcat_clear(state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(ref stream) = state.logcat.lock().await.stream {
-        stream.clear();
-    }
+    state.shared.clear_logcat().await;
     Ok(())
 }
 
@@ -260,39 +233,105 @@ async fn logcat_query(
     query: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<LogEntry>, String> {
-    let lc = state.logcat.lock().await;
-    let Some(ref stream) = lc.stream else {
-        return Ok(Vec::new());
-    };
-    Ok(stream.entries(&LogFilter {
-        min_level,
-        tag,
-        query,
-        limit,
-    }))
+    Ok(state
+        .shared
+        .query_logcat(min_level, tag, query, limit)
+        .await)
 }
 
 #[tauri::command]
 async fn logcat_crashes(state: State<'_, AppState>) -> Result<Vec<CrashGroup>, String> {
-    let lc = state.logcat.lock().await;
-    let Some(ref stream) = lc.stream else {
-        return Ok(Vec::new());
-    };
-    Ok(stream.crashes())
+    Ok(state.shared.logcat_crashes().await)
+}
+
+#[tauri::command]
+async fn pin_add(
+    state: State<'_, AppState>,
+    req: NewPinRequest,
+) -> Result<Vec<PinnedItem>, String> {
+    state.shared.pins.add(req);
+    Ok(state.shared.pins.list())
+}
+
+#[tauri::command]
+async fn pin_list(state: State<'_, AppState>) -> Result<Vec<PinnedItem>, String> {
+    Ok(state.shared.pins.list())
+}
+
+#[tauri::command]
+async fn pin_remove(state: State<'_, AppState>, id: String) -> Result<Vec<PinnedItem>, String> {
+    state.shared.pins.remove(&id);
+    Ok(state.shared.pins.list())
+}
+
+#[tauri::command]
+async fn pin_clear(state: State<'_, AppState>) -> Result<Vec<PinnedItem>, String> {
+    state.shared.pins.clear();
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+async fn mcp_status(state: State<'_, AppState>) -> Result<McpStatusDto, String> {
+    let port = state.mcp_port.load(Ordering::Relaxed);
+    Ok(McpStatusDto {
+        running: port != 0,
+        port,
+        endpoint: if port != 0 {
+            format!("http://127.0.0.1:{port}/mcp")
+        } else {
+            String::new()
+        },
+        pinned_count: state.shared.pins.list().len(),
+    })
 }
 
 fn main() {
-    let state = AppState {
-        debug: DebugSession::new(),
-        logcat: Arc::new(Mutex::new(LogcatState {
-            stream: None,
-            forward_task: None,
-        })),
-    };
+    let shared = SharedLensState::shared();
+    let mcp_port = Arc::new(AtomicU16::new(0));
+
+    let shared_setup = Arc::clone(&shared);
+    let port_setup = Arc::clone(&mcp_port);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(state)
+        .manage(AppState { shared, mcp_port })
+        .setup(move |app| {
+            // Bridge live DebugSession events (whether triggered from UI or MCP) to the WebView.
+            let mut dbg_rx = shared_setup.debug.subscribe();
+            let app_dbg = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Ok(ev) = dbg_rx.recv().await {
+                    let _ = app_dbg.emit("debug://event", ev);
+                }
+            });
+
+            // Bridge live Logcat events to the WebView.
+            let mut lc_rx = shared_setup.subscribe_logcat();
+            let app_lc = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Ok(ev) = lc_rx.recv().await {
+                    let _ = app_lc.emit("logcat://event", ev);
+                }
+            });
+
+            // Start the embedded localhost MCP server sharing the live DebugSession & pins.
+            let shared_mcp = Arc::clone(&shared_setup);
+            let port_holder = Arc::clone(&port_setup);
+            tauri::async_runtime::spawn(async move {
+                match spawn_http_mcp_server(Arc::clone(&shared_mcp), DEFAULT_MCP_PORT).await {
+                    Ok((bound, _)) => {
+                        port_holder.store(bound, Ordering::Relaxed);
+                    }
+                    Err(_) => {
+                        if let Ok((bound, _)) = spawn_http_mcp_server(shared_mcp, 0).await {
+                            port_holder.store(bound, Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             adb_list_devices,
             adb_list_packages,
@@ -310,6 +349,7 @@ fn main() {
             debug_get_call_stack,
             debug_get_locals,
             debug_inspect_object,
+            fs_set_project_root,
             fs_list_dir,
             fs_read_file,
             fs_list_project_files,
@@ -319,6 +359,11 @@ fn main() {
             logcat_clear,
             logcat_query,
             logcat_crashes,
+            pin_add,
+            pin_list,
+            pin_remove,
+            pin_clear,
+            mcp_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Android Lens desktop application");

@@ -30,14 +30,14 @@ Tracking remaining work across phases for **android-lens**.
 ---
 
 ## Phase 2 — Agentic AI Bridge (MCP Server)
-- [ ] Create `crates/mcp-server` sharing the live `DebugSession` with the Tauri UI
-- [ ] Expose core MCP tools for Claude Code & Antigravity:
-  - [ ] `debug_attach` / `debug_set_breakpoint` / `debug_step`
-  - [ ] `debug_get_state` (paused thread, call stack, source snippet, local variables)
-  - [ ] `debug_inspect_object(object_id, depth)`
-  - [ ] `logcat_tail(package, level, limit)`
-  - [ ] `get_pinned_context()`
-- [ ] Add **"Pin to Agent"** button in the UI on stack frames, variables, and logcat entries
+- [x] Create `crates/mcp-server` sharing the live `DebugSession` with the Tauri UI
+- [x] Expose core MCP tools for Claude Code & Antigravity:
+  - [x] `debug_attach` / `debug_set_breakpoint` / `debug_step`
+  - [x] `debug_get_state` (paused thread, call stack, source snippet, local variables)
+  - [x] `debug_inspect_object(object_id, depth)`
+  - [x] `logcat_tail(package, level, limit)`
+  - [x] `get_pinned_context()`
+- [x] Add **"Pin to Agent"** button in the UI on stack frames, variables, and logcat entries
 
 ---
 

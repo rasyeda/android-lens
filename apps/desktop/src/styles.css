@@ -59,6 +59,8 @@ html[data-theme="dark"] {
   --al-blue-bg: rgba(79, 143, 247, 0.14);
 
   --al-violet: #a78bfa;
+  --al-violet-bg: rgba(167, 139, 250, 0.13);
+  --al-violet-border: rgba(167, 139, 250, 0.34);
   --al-cyan: #56d4dd;
 
   --al-exec-bg: rgba(245, 185, 66, 0.13);
@@ -105,6 +107,8 @@ html[data-theme="light"] {
   --al-blue-bg: rgba(37, 99, 235, 0.1);
 
   --al-violet: #7c3aed;
+  --al-violet-bg: rgba(124, 58, 237, 0.1);
+  --al-violet-border: rgba(124, 58, 237, 0.28);
   --al-cyan: #0e7490;
 
   --al-exec-bg: rgba(245, 185, 66, 0.18);
@@ -1370,3 +1374,186 @@ body,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   Phase 2 — MCP Status Popover & Pin to Agent Controls
+   ========================================================================== */
+
+.mcp-wrap {
+  position: relative;
+}
+
+.btn-mcp {
+  background: var(--al-violet-bg);
+  border-color: var(--al-violet-border);
+  color: var(--al-violet);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+.btn-mcp:hover:not(:disabled) {
+  background: rgba(167, 139, 250, 0.22);
+}
+
+.mcp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--al-violet);
+}
+
+.popover-right {
+  left: auto;
+  right: 0;
+  min-width: 340px;
+  padding: var(--sp-3);
+  gap: var(--sp-2);
+}
+
+.mcp-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.mcp-endpoint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--al-violet);
+}
+
+.mcp-snippet {
+  background: var(--al-s0);
+  border: 1px solid var(--al-border);
+  border-radius: var(--r-md);
+  padding: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--al-text);
+  overflow-x: auto;
+  user-select: text;
+}
+
+.mcp-pop-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.btn-xs-h {
+  height: 24px;
+  font-size: 11.5px;
+}
+
+.pill-ai {
+  background: var(--al-violet-bg);
+  color: var(--al-violet);
+}
+
+.small-hint {
+  font-size: 11px;
+}
+
+/* Subtle hover-reveal Pin button across variables, stack frames, logcat, crashes */
+.pin-btn {
+  margin-left: auto;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--al-violet-border);
+  border-radius: var(--r-sm);
+  background: var(--al-violet-bg);
+  color: var(--al-violet);
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  opacity: 0;
+  flex-shrink: 0;
+  transition: opacity 0.1s ease, background 0.1s ease;
+}
+
+.var-row:hover .pin-btn,
+.frame-row:hover .pin-btn,
+.log-row:hover .pin-btn,
+.crash-head:hover .pin-btn,
+.pin-btn.pinned {
+  opacity: 1;
+}
+
+.pin-btn:hover {
+  background: rgba(167, 139, 250, 0.26);
+}
+
+.frame-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.log-row {
+  grid-template-columns: 116px 20px 144px 1fr auto;
+  align-items: start;
+}
+
+/* Pinned Context List */
+.pinned-list {
+  padding: var(--sp-1) 0;
+}
+
+.pin-row {
+  min-height: 30px;
+  padding: 5px var(--sp-3);
+  border-bottom: 1px solid var(--al-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.pin-row:hover {
+  background: var(--al-s1);
+}
+
+.pin-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.pin-kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: var(--al-violet-bg);
+  color: var(--al-violet);
+  flex-shrink: 0;
+}
+
+.pin-title {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--al-text);
+  white-space: nowrap;
+}
+
+.pin-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--al-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

@@ -103,6 +103,25 @@ interface CrashGroup {
   lines: string[];
 }
 
+type PinKind = "stack_frame" | "variable" | "logcat_entry" | "crash";
+
+interface PinnedItem {
+  id: string;
+  kind: PinKind;
+  title: string;
+  summary: string;
+  note: string | null;
+  payload: unknown;
+  pinned_at_ms: number;
+}
+
+interface McpStatusDto {
+  running: boolean;
+  port: number;
+  endpoint: string;
+  pinned_count: number;
+}
+
 type DebugUiEvent =
   | { kind: "status_changed"; status: SessionStatus }
   | { kind: "breakpoints_changed"; breakpoints: BreakpointDto[] }
@@ -151,6 +170,7 @@ const MAX_RENDERED_LOGS = 1500;
 
 const CHEVRON_RIGHT = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>`;
 const CHEVRON_DOWN = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>`;
+const PIN_ICON = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.8 2.2 13.8 6.2l-1.5 1.5-1-.3-2.5 2.5.4 1.6-1.2 1.2-2.7-2.7-2.6 2.6-.7-.7 2.6-2.6-2.7-2.7 1.2-1.2 1.6.4 2.5-2.5-.3-1 1.5-1.5z"/></svg>`;
 const MOON_PATH = `<path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" />`;
 const SUN_PATH = `<circle cx="8" cy="8" r="3" /><path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M12.4 3.6l-1.05 1.05M4.65 11.35 3.6 12.4" />`;
 
@@ -177,6 +197,13 @@ const stepOutBtn = document.getElementById("step-out-btn") as HTMLButtonElement;
 
 const statusPill = document.getElementById("status-pill") as HTMLSpanElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
+const mcpPillBtn = document.getElementById("mcp-pill-btn") as HTMLButtonElement;
+const mcpPillText = document.getElementById("mcp-pill-text") as HTMLSpanElement;
+const mcpPopover = document.getElementById("mcp-popover") as HTMLDivElement;
+const mcpPopEndpoint = document.getElementById("mcp-pop-endpoint") as HTMLSpanElement;
+const mcpSnippet = document.getElementById("mcp-snippet") as HTMLPreElement;
+const mcpCopyBtn = document.getElementById("mcp-copy-btn") as HTMLButtonElement;
+const mcpCopyFeedback = document.getElementById("mcp-copy-feedback") as HTMLSpanElement;
 const toggleLeftBtn = document.getElementById("toggle-left-btn") as HTMLButtonElement;
 const toggleDockBtn = document.getElementById("toggle-dock-btn") as HTMLButtonElement;
 const themeToggleBtn = document.getElementById("theme-toggle-btn") as HTMLButtonElement;
@@ -213,15 +240,18 @@ const varsFrameLabelEl = document.getElementById("vars-frame-label") as HTMLSpan
 const logcatPidPill = document.getElementById("logcat-pid-pill") as HTMLSpanElement;
 const crashesCountEl = document.getElementById("crashes-count") as HTMLSpanElement;
 const bpsCountEl = document.getElementById("bps-count") as HTMLSpanElement;
+const pinsCountEl = document.getElementById("pins-count") as HTMLSpanElement;
 const logcatLevelSelect = document.getElementById("logcat-level") as HTMLSelectElement;
 const logcatTagInput = document.getElementById("logcat-tag") as HTMLInputElement;
 const logcatQueryInput = document.getElementById("logcat-query") as HTMLInputElement;
 const logcatAutoScroll = document.getElementById("logcat-autoscroll") as HTMLInputElement;
 const logcatToggleBtn = document.getElementById("logcat-toggle-btn") as HTMLButtonElement;
 const logcatClearBtn = document.getElementById("logcat-clear-btn") as HTMLButtonElement;
+const pinsClearBtn = document.getElementById("pins-clear-btn") as HTMLButtonElement;
 const logcatListEl = document.getElementById("logcat-list") as HTMLDivElement;
 const crashesListEl = document.getElementById("crashes-list") as HTMLDivElement;
 const breakpointsListEl = document.getElementById("breakpoints-list") as HTMLDivElement;
+const pinnedListEl = document.getElementById("pinned-list") as HTMLDivElement;
 
 const quickOpenBackdrop = document.getElementById("quick-open-backdrop") as HTMLDivElement;
 const quickOpenInput = document.getElementById("quick-open-input") as HTMLInputElement;
@@ -257,6 +287,7 @@ let execHighlight: { fileName: string; line: number } | null = null;
 let logcatRunning = false;
 let logEntries: LogEntry[] = [];
 let crashGroups: CrashGroup[] = [];
+let pinnedItems: PinnedItem[] = [];
 
 let paletteMatches: ProjectFile[] = [];
 let paletteIndex = 0;
@@ -392,6 +423,7 @@ async function refreshPackages() {
 async function openProjectFolder(path: string) {
   projectRoot = path;
   localStorage.setItem("android-lens:projectRoot", path);
+  await invoke("fs_set_project_root", { path });
   const folderName = path.split("/").filter(Boolean).pop() ?? path;
   projectPathBar.textContent = folderName;
   projectPathBar.title = path;
@@ -743,7 +775,35 @@ function renderCallStack() {
     const shortCls = f.class_name.split(".").pop() ?? f.class_name;
     const locText = f.source_file ? `${f.source_file}:${f.line_number ?? "?"}` : "native";
     row.title = `${f.class_name}.${f.method_name} (${locText})`;
-    row.innerHTML = `<span class="frame-name">${escapeHtml(shortCls)}.${escapeHtml(f.method_name)}</span><span class="frame-loc">${escapeHtml(locText)}</span>`;
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "frame-name";
+    nameEl.textContent = `${shortCls}.${f.method_name}`;
+
+    const right = document.createElement("span");
+    right.className = "frame-right";
+    const locEl = document.createElement("span");
+    locEl.className = "frame-loc";
+    locEl.textContent = locText;
+
+    const pinBtn = makePinButton("Pin stack frame to AI agent", () =>
+      pinContext({
+        kind: "stack_frame",
+        title: `${shortCls}.${f.method_name}`,
+        summary: `${f.class_name}.${f.method_name} (${locText})`,
+        payload: {
+          frame_index: f.index,
+          class_name: f.class_name,
+          method_name: f.method_name,
+          source_file: f.source_file,
+          line_number: f.line_number,
+          thread_id: selectedThreadId,
+        },
+      }),
+    );
+
+    right.append(locEl, pinBtn);
+    row.append(nameEl, right);
 
     row.onclick = async () => {
       selectedFrameIndex = f.index;
@@ -860,6 +920,24 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
     row.appendChild(owner);
   }
 
+  const pinBtn = makePinButton("Pin variable to AI agent", () =>
+    pinContext({
+      kind: "variable",
+      title: v.name,
+      summary: `${v.name} : ${v.type_name || "value"} = ${v.value}`,
+      payload: {
+        name: v.name,
+        type_name: v.type_name,
+        value: v.value,
+        object_id_hex: v.object_id_hex,
+        is_static: v.is_static,
+        declaring_class: v.declaring_class,
+        frame_index: selectedFrameIndex,
+      },
+    }),
+  );
+  row.appendChild(pinBtn);
+
   container.appendChild(row);
 
   if (v.is_expandable && v.object_id_hex) {
@@ -969,6 +1047,16 @@ function createLogRow(entry: LogEntry): HTMLElement {
   row.className = `log-row ${entry.level}`;
   const letter = entry.level[0]?.toUpperCase() ?? "?";
   row.innerHTML = `<span class="log-ts">${escapeHtml(entry.timestamp)}</span><span class="log-lvl ${entry.level}">${letter}</span><span class="log-tag" title="${escapeHtml(entry.tag)}">${escapeHtml(entry.tag)}</span><span>${escapeHtml(entry.message)}</span>`;
+  row.appendChild(
+    makePinButton("Pin logcat entry to AI agent", () =>
+      pinContext({
+        kind: "logcat_entry",
+        title: `${letter}/${entry.tag || "log"}`,
+        summary: `[${entry.timestamp}] ${entry.message}`,
+        payload: entry,
+      }),
+    ),
+  );
   return row;
 }
 
@@ -1022,7 +1110,23 @@ function renderCrashes() {
     card.className = "crash-card";
     const head = document.createElement("div");
     head.className = "crash-head";
-    head.innerHTML = `<span>${escapeHtml(crash.summary)}</span><span class="muted">${escapeHtml(crash.timestamp)} · PID ${crash.pid}</span>`;
+    const left = document.createElement("span");
+    left.textContent = crash.summary;
+    const right = document.createElement("span");
+    right.className = "frame-right";
+    const meta = document.createElement("span");
+    meta.className = "muted";
+    meta.textContent = `${crash.timestamp} · PID ${crash.pid}`;
+    const pinBtn = makePinButton("Pin crash stack to AI agent", () =>
+      pinContext({
+        kind: "crash",
+        title: crash.summary,
+        summary: `${crash.process ?? "app"} (PID ${crash.pid}) · ${crash.lines.length} lines`,
+        payload: crash,
+      }),
+    );
+    right.append(meta, pinBtn);
+    head.append(left, right);
 
     const body = document.createElement("pre");
     body.className = "crash-stack";
@@ -1061,6 +1165,116 @@ function escapeHtml(s: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+// --- Pinned Context & MCP Bridge ---
+
+function makePinButton(title: string, onPin: () => Promise<void>): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.className = "pin-btn";
+  btn.title = title;
+  btn.innerHTML = `${PIN_ICON}<span>Pin</span>`;
+  btn.onclick = async (e) => {
+    e.stopPropagation();
+    await onPin();
+    btn.classList.add("pinned");
+    btn.innerHTML = `${PIN_ICON}<span>Pinned</span>`;
+    setTimeout(() => {
+      btn.classList.remove("pinned");
+      btn.innerHTML = `${PIN_ICON}<span>Pin</span>`;
+    }, 1200);
+  };
+  return btn;
+}
+
+async function pinContext(req: {
+  kind: PinKind;
+  title: string;
+  summary: string;
+  payload: unknown;
+}) {
+  try {
+    const items = await invoke<PinnedItem[]>("pin_add", {
+      req: { ...req, note: null },
+    });
+    updatePinnedItems(items);
+  } catch (err) {
+    showBanner(`Pin error: ${String(err)}`);
+  }
+}
+
+function updatePinnedItems(items: PinnedItem[]) {
+  pinnedItems = items;
+  pinsCountEl.textContent = String(pinnedItems.length);
+  pinnedListEl.innerHTML = "";
+
+  if (pinnedItems.length === 0) {
+    pinnedListEl.innerHTML = `<div class="empty-hint">Hover any variable, stack frame, logcat line, or crash and click Pin to share it with your AI agent</div>`;
+    return;
+  }
+
+  const kindLabel: Record<PinKind, string> = {
+    stack_frame: "Frame",
+    variable: "Var",
+    logcat_entry: "Log",
+    crash: "Crash",
+  };
+
+  for (const item of [...pinnedItems].reverse()) {
+    const row = document.createElement("div");
+    row.className = "pin-row";
+
+    const left = document.createElement("div");
+    left.className = "pin-left";
+    const badge = document.createElement("span");
+    badge.className = "pin-kind";
+    badge.textContent = kindLabel[item.kind];
+    const title = document.createElement("span");
+    title.className = "pin-title";
+    title.textContent = item.title;
+    const summary = document.createElement("span");
+    summary.className = "pin-summary";
+    summary.textContent = item.summary;
+    summary.title = item.summary;
+    left.append(badge, title, summary);
+
+    const rm = document.createElement("button");
+    rm.className = "btn btn-ghost-xs";
+    rm.textContent = "Remove";
+    rm.onclick = async () => {
+      const updated = await invoke<PinnedItem[]>("pin_remove", { id: item.id });
+      updatePinnedItems(updated);
+    };
+
+    row.append(left, rm);
+    pinnedListEl.appendChild(row);
+  }
+}
+
+async function refreshMcpStatus() {
+  try {
+    const st = await invoke<McpStatusDto>("mcp_status");
+    if (st.running) {
+      mcpPillText.textContent = `MCP :${st.port}`;
+      mcpPopEndpoint.textContent = st.endpoint;
+      mcpSnippet.textContent = JSON.stringify(
+        {
+          mcpServers: {
+            "android-lens": {
+              command: "android-lens-mcp",
+              args: ["--desktop-port", String(st.port)],
+            },
+          },
+        },
+        null,
+        2,
+      );
+    } else {
+      mcpPillText.textContent = "MCP starting…";
+    }
+  } catch {
+    mcpPillText.textContent = "MCP";
+  }
 }
 
 // --- Session Actions ---
@@ -1131,7 +1345,34 @@ debugMenu.querySelectorAll<HTMLButtonElement>(".popover-item").forEach((item) =>
     void startSession(mode);
   };
 });
-document.addEventListener("click", () => debugMenu.classList.add("hidden"));
+document.addEventListener("click", () => {
+  debugMenu.classList.add("hidden");
+  mcpPopover.classList.add("hidden");
+});
+
+mcpPillBtn.onclick = async (e) => {
+  e.stopPropagation();
+  debugMenu.classList.add("hidden");
+  await refreshMcpStatus();
+  mcpPopover.classList.toggle("hidden");
+};
+mcpPopover.onclick = (e) => e.stopPropagation();
+mcpCopyBtn.onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(mcpSnippet.textContent ?? "");
+    mcpCopyFeedback.textContent = "Copied";
+    setTimeout(() => {
+      mcpCopyFeedback.textContent = "";
+    }, 1500);
+  } catch {
+    mcpCopyFeedback.textContent = "Select & copy above";
+  }
+};
+
+pinsClearBtn.onclick = async () => {
+  const updated = await invoke<PinnedItem[]>("pin_clear");
+  updatePinnedItems(updated);
+};
 
 stopRunningBtn.onclick = () => void detachSession();
 stopPausedBtn.onclick = () => void detachSession();
@@ -1264,7 +1505,9 @@ document.querySelectorAll<HTMLButtonElement>(".dock-tab").forEach((btn) => {
     btn.classList.add("active");
     document.getElementById(`tab-${tab}`)?.classList.add("active");
     const controls = document.getElementById("logcat-controls")!;
-    controls.style.display = tab === "logcat" ? "flex" : "none";
+    const pinnedControls = document.getElementById("pinned-controls")!;
+    controls.classList.toggle("hidden", tab !== "logcat");
+    pinnedControls.classList.toggle("hidden", tab !== "pinned");
   };
 });
 
@@ -1356,7 +1599,11 @@ async function init() {
 
   await refreshDevices();
   updateBreakpoints(await invoke<BreakpointDto[]>("debug_list_breakpoints"));
+  updatePinnedItems(await invoke<PinnedItem[]>("pin_list"));
   applyStatus(await invoke<SessionStatus>("debug_get_status"));
+  await refreshMcpStatus();
+  // Retry once shortly after boot in case the background HTTP MCP server just bound its port
+  setTimeout(() => void refreshMcpStatus(), 600);
 
   if (projectRoot) {
     try {

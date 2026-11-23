@@ -4,6 +4,7 @@ members = [
     "crates/adb-bridge",
     "crates/jdwp-client",
     "crates/logcat-stream",
+    "crates/mcp-server",
     "crates/cli-poc",
     "apps/desktop/src-tauri",
 ]
