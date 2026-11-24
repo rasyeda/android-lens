@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
 use adb_bridge::AdbDevice;
+use app_inspector::storage::{AppStorageIndex, PrefEntry, SqliteTableData};
+use app_inspector::uiautomator::LayoutSnapshot;
 use jdwp_client::StepDepth;
 use logcat_stream::{CrashGroup, LogEntry, LogLevel};
 use mcp_server::http::spawn_http_mcp_server;
@@ -285,6 +287,84 @@ async fn mcp_status(state: State<'_, AppState>) -> Result<McpStatusDto, String> 
     })
 }
 
+#[tauri::command]
+async fn inspector_launch_scrcpy(serial: Option<String>) -> Result<String, String> {
+    app_inspector::launch_scrcpy(serial.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn inspector_capture_layout(serial: Option<String>) -> Result<LayoutSnapshot, String> {
+    app_inspector::uiautomator::capture_layout_snapshot(serial.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn inspector_list_storage(
+    serial: Option<String>,
+    package: String,
+) -> Result<AppStorageIndex, String> {
+    app_inspector::storage::list_app_storage(serial.as_deref(), &package)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn inspector_read_shared_prefs(
+    serial: Option<String>,
+    package: String,
+    file_name: String,
+) -> Result<Vec<PrefEntry>, String> {
+    app_inspector::storage::read_shared_prefs(serial.as_deref(), &package, &file_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn inspector_read_datastore(
+    serial: Option<String>,
+    package: String,
+    file_name: String,
+) -> Result<Vec<PrefEntry>, String> {
+    app_inspector::storage::read_datastore_prefs(serial.as_deref(), &package, &file_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn inspector_list_sqlite_tables(
+    serial: Option<String>,
+    package: String,
+    db_name: String,
+) -> Result<Vec<String>, String> {
+    app_inspector::storage::list_sqlite_tables(serial.as_deref(), &package, &db_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn inspector_query_sqlite(
+    serial: Option<String>,
+    package: String,
+    db_name: String,
+    table_or_sql: String,
+    is_custom_sql: bool,
+    limit: Option<usize>,
+) -> Result<SqliteTableData, String> {
+    app_inspector::storage::query_sqlite_table(
+        serial.as_deref(),
+        &package,
+        &db_name,
+        &table_or_sql,
+        is_custom_sql,
+        limit.unwrap_or(100),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 fn main() {
     let shared = SharedLensState::shared();
     let mcp_port = Arc::new(AtomicU16::new(0));
@@ -364,6 +444,13 @@ fn main() {
             pin_remove,
             pin_clear,
             mcp_status,
+            inspector_launch_scrcpy,
+            inspector_capture_layout,
+            inspector_list_storage,
+            inspector_read_shared_prefs,
+            inspector_read_datastore,
+            inspector_list_sqlite_tables,
+            inspector_query_sqlite,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Android Lens desktop application");

@@ -8,6 +8,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 adb-bridge = { path = "../../../crates/adb-bridge" }
+app-inspector = { path = "../../../crates/app-inspector" }
 jdwp-client = { path = "../../../crates/jdwp-client" }
 logcat-stream = { path = "../../../crates/logcat-stream" }
 mcp-server = { path = "../../../crates/mcp-server" }

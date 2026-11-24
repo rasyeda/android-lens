@@ -23,6 +23,17 @@
               <path d="M13.5 2.75v2.75h-2.75" />
             </svg>
           </button>
+          <button
+            id="scrcpy-btn"
+            class="btn btn-icon"
+            title="Mirror device screen with scrcpy"
+            aria-label="Mirror device with scrcpy"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="1.75" width="8" height="12.5" rx="1.5" />
+              <path d="M7 11.75h2" />
+            </svg>
+          </button>
           <input
             id="package-input"
             class="ctrl input-package"
@@ -276,30 +287,51 @@
               <span>Pinned</span>
               <span id="pins-count" class="pill pill-ai">0</span>
             </button>
+            <button class="dock-tab" data-tab="layout">
+              <span>Layout</span>
+              <span id="layout-count" class="pill">0</span>
+            </button>
+            <button class="dock-tab" data-tab="storage">
+              <span>Storage</span>
+            </button>
           </div>
 
-          <div id="logcat-controls" class="dock-controls">
-            <select id="logcat-level" class="ctrl ctrl-sm" title="Minimum log level">
-              <option value="verbose">Verbose</option>
-              <option value="debug" selected>Debug</option>
-              <option value="info">Info</option>
-              <option value="warn">Warn</option>
-              <option value="error">Error</option>
-              <option value="fatal">Fatal</option>
-            </select>
-            <input id="logcat-tag" class="ctrl ctrl-sm input-dock" placeholder="Tag…" />
-            <input id="logcat-query" class="ctrl ctrl-sm input-dock" placeholder="Search…" />
-            <label class="toggle-check">
-              <input id="logcat-autoscroll" type="checkbox" checked />
-              <span>Follow</span>
-            </label>
-            <button id="logcat-toggle-btn" class="btn btn-ghost-xs">Start</button>
-            <button id="logcat-clear-btn" class="btn btn-ghost-xs">Clear</button>
-          </div>
+          <div class="dock-right-bar">
+            <div id="logcat-controls" class="dock-controls">
+              <select id="logcat-level" class="ctrl ctrl-sm" title="Minimum log level">
+                <option value="verbose">Verbose</option>
+                <option value="debug" selected>Debug</option>
+                <option value="info">Info</option>
+                <option value="warn">Warn</option>
+                <option value="error">Error</option>
+                <option value="fatal">Fatal</option>
+              </select>
+              <input id="logcat-tag" class="ctrl ctrl-sm input-dock" placeholder="Tag…" />
+              <input id="logcat-query" class="ctrl ctrl-sm input-dock" placeholder="Search…" />
+              <label class="toggle-check">
+                <input id="logcat-autoscroll" type="checkbox" checked />
+                <span>Follow</span>
+              </label>
+              <button id="logcat-toggle-btn" class="btn btn-ghost-xs">Start</button>
+              <button id="logcat-clear-btn" class="btn btn-ghost-xs">Clear</button>
+            </div>
 
-          <div id="pinned-controls" class="dock-controls hidden">
-            <span class="muted small-hint">Exposed via <code>get_pinned_context()</code></span>
-            <button id="pins-clear-btn" class="btn btn-ghost-xs">Clear all</button>
+            <div id="pinned-controls" class="dock-controls hidden">
+              <span class="muted small-hint">Exposed via <code>get_pinned_context()</code></span>
+              <button id="pins-clear-btn" class="btn btn-ghost-xs">Clear all</button>
+            </div>
+
+            <div id="layout-controls" class="dock-controls hidden">
+              <input id="layout-filter-input" class="ctrl ctrl-sm input-dock" placeholder="Filter views…" />
+              <button id="layout-capture-btn" class="btn btn-primary btn-xs-h">Capture Screen</button>
+            </div>
+
+            <div id="storage-controls" class="dock-controls hidden">
+              <input id="storage-filter-input" class="ctrl ctrl-sm input-dock" placeholder="Filter rows…" />
+              <button id="storage-refresh-btn" class="btn btn-ghost-xs">Refresh</button>
+            </div>
+
+            <button id="dock-expand-btn" class="btn btn-ghost-xs" title="Expand / restore bottom panel">Expand</button>
           </div>
         </div>
 
@@ -324,6 +356,39 @@
         <div id="tab-pinned" class="dock-panel">
           <div id="pinned-list" class="pinned-list">
             <div class="empty-hint">Hover any variable, stack frame, logcat line, or crash and click Pin to share it with your AI agent</div>
+          </div>
+        </div>
+
+        <div id="tab-layout" class="dock-panel">
+          <div class="layout-inspector">
+            <div class="layout-canvas-pane">
+              <div id="layout-stage" class="layout-stage">
+                <div class="empty-hint">Click Capture Screen to dump screenshot + uiautomator hierarchy</div>
+              </div>
+            </div>
+            <div id="layout-tree" class="layout-tree-pane">
+              <div class="empty-hint">View hierarchy</div>
+            </div>
+            <div id="layout-props" class="layout-props-pane">
+              <div class="empty-hint">Select a view to inspect bounds &amp; attributes</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-storage" class="dock-panel">
+          <div class="storage-inspector">
+            <div id="storage-sidebar" class="storage-sidebar">
+              <div class="empty-hint">Click Refresh to inspect SharedPreferences, DataStore &amp; SQLite</div>
+            </div>
+            <div class="storage-main">
+              <div id="storage-sql-bar" class="storage-sql-bar hidden">
+                <input id="storage-sql-input" class="ctrl ctrl-sm" placeholder="SELECT * FROM table LIMIT 100" />
+                <button id="storage-sql-run-btn" class="btn btn-primary btn-xs-h">Run</button>
+              </div>
+              <div id="storage-content" class="storage-content">
+                <div class="empty-hint">Select a preferences file or SQLite table</div>
+              </div>
+            </div>
           </div>
         </div>
       </footer>

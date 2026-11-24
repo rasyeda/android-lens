@@ -12,6 +12,8 @@ pub enum PinKind {
     Variable,
     LogcatEntry,
     Crash,
+    UiNode,
+    StorageEntry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -42,8 +42,8 @@ Tracking remaining work across phases for **android-lens**.
 ---
 
 ## Phase 3 — Visual & App State Inspection
-- [ ] One-click `scrcpy` mirror launcher from the device toolbar
-- [ ] Create `crates/app-inspector`:
-  - [ ] `uiautomator` XML hierarchy dump + visual overlay over device screenshot
-  - [ ] `adb shell run-as <pkg>` browser for SQLite databases and SharedPreferences/DataStore
+- [x] One-click `scrcpy` mirror launcher from the device toolbar
+- [x] Create `crates/app-inspector`:
+  - [x] `uiautomator` XML hierarchy dump + visual overlay over device screenshot
+  - [x] `adb shell run-as <pkg>` browser for SQLite databases and SharedPreferences/DataStore
 - [ ] (v2+) Kotlin inline-function SMAP mapping & Compose semantics inspection

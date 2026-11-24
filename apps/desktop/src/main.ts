@@ -103,7 +103,7 @@ interface CrashGroup {
   lines: string[];
 }
 
-type PinKind = "stack_frame" | "variable" | "logcat_entry" | "crash";
+type PinKind = "stack_frame" | "variable" | "logcat_entry" | "crash" | "ui_node" | "storage_entry";
 
 interface PinnedItem {
   id: string;
@@ -113,6 +113,60 @@ interface PinnedItem {
   note: string | null;
   payload: unknown;
   pinned_at_ms: number;
+}
+
+interface UiBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+interface UiNode {
+  id: string;
+  class_name: string;
+  package_name: string;
+  resource_id: string;
+  text: string;
+  content_desc: string;
+  clickable: boolean;
+  enabled: boolean;
+  focused: boolean;
+  scrollable: boolean;
+  selected: boolean;
+  bounds: UiBounds;
+  children: UiNode[];
+}
+
+interface LayoutSnapshot {
+  serial: string;
+  screen_width: number;
+  screen_height: number;
+  screenshot_data_url: string;
+  roots: UiNode[];
+  node_count: number;
+}
+
+interface AppStorageIndex {
+  serial: string;
+  package: string;
+  shared_prefs: string[];
+  datastores: string[];
+  databases: string[];
+}
+
+interface PrefEntry {
+  key: string;
+  value_type: string;
+  value: string;
+}
+
+interface SqliteTableData {
+  database: string;
+  table: string;
+  columns: string[];
+  rows: string[][];
+  total_rows: number;
 }
 
 interface McpStatusDto {
@@ -177,6 +231,7 @@ const SUN_PATH = `<circle cx="8" cy="8" r="3" /><path d="M8 1.75v1.5M8 12.75v1.5
 // DOM refs
 const deviceSelect = document.getElementById("device-select") as HTMLSelectElement;
 const refreshDevicesBtn = document.getElementById("refresh-devices-btn") as HTMLButtonElement;
+const scrcpyBtn = document.getElementById("scrcpy-btn") as HTMLButtonElement;
 const packageInput = document.getElementById("package-input") as HTMLInputElement;
 const packageDatalist = document.getElementById("package-datalist") as HTMLDataListElement;
 
@@ -253,6 +308,22 @@ const crashesListEl = document.getElementById("crashes-list") as HTMLDivElement;
 const breakpointsListEl = document.getElementById("breakpoints-list") as HTMLDivElement;
 const pinnedListEl = document.getElementById("pinned-list") as HTMLDivElement;
 
+const dockExpandBtn = document.getElementById("dock-expand-btn") as HTMLButtonElement;
+const layoutCountEl = document.getElementById("layout-count") as HTMLSpanElement;
+const layoutFilterInput = document.getElementById("layout-filter-input") as HTMLInputElement;
+const layoutCaptureBtn = document.getElementById("layout-capture-btn") as HTMLButtonElement;
+const layoutStageEl = document.getElementById("layout-stage") as HTMLDivElement;
+const layoutTreeEl = document.getElementById("layout-tree") as HTMLDivElement;
+const layoutPropsEl = document.getElementById("layout-props") as HTMLDivElement;
+
+const storageFilterInput = document.getElementById("storage-filter-input") as HTMLInputElement;
+const storageRefreshBtn = document.getElementById("storage-refresh-btn") as HTMLButtonElement;
+const storageSidebarEl = document.getElementById("storage-sidebar") as HTMLDivElement;
+const storageSqlBar = document.getElementById("storage-sql-bar") as HTMLDivElement;
+const storageSqlInput = document.getElementById("storage-sql-input") as HTMLInputElement;
+const storageSqlRunBtn = document.getElementById("storage-sql-run-btn") as HTMLButtonElement;
+const storageContentEl = document.getElementById("storage-content") as HTMLDivElement;
+
 const quickOpenBackdrop = document.getElementById("quick-open-backdrop") as HTMLDivElement;
 const quickOpenInput = document.getElementById("quick-open-input") as HTMLInputElement;
 const quickOpenResults = document.getElementById("quick-open-results") as HTMLDivElement;
@@ -288,6 +359,19 @@ let logcatRunning = false;
 let logEntries: LogEntry[] = [];
 let crashGroups: CrashGroup[] = [];
 let pinnedItems: PinnedItem[] = [];
+
+let layoutSnapshot: LayoutSnapshot | null = null;
+let flatUiNodes: UiNode[] = [];
+let selectedUiNodeId: string | null = null;
+let hoveredUiNodeId: string | null = null;
+
+let storageIndex: AppStorageIndex | null = null;
+const sqliteTablesCache = new Map<string, string[]>();
+let activeStorageSelection:
+  | { kind: "shared_prefs"; file: string; entries: PrefEntry[] }
+  | { kind: "datastore"; file: string; entries: PrefEntry[] }
+  | { kind: "sqlite"; db: string; table: string; data: SqliteTableData }
+  | null = null;
 
 let paletteMatches: ProjectFile[] = [];
 let paletteIndex = 0;
@@ -1218,6 +1302,8 @@ function updatePinnedItems(items: PinnedItem[]) {
     variable: "Var",
     logcat_entry: "Log",
     crash: "Crash",
+    ui_node: "UI",
+    storage_entry: "Data",
   };
 
   for (const item of [...pinnedItems].reverse()) {
@@ -1277,6 +1363,487 @@ async function refreshMcpStatus() {
   }
 }
 
+// --- Phase 3: scrcpy, Visual Layout Inspector, and Storage Browser ---
+
+async function launchScrcpyMirror() {
+  hideBanner();
+  try {
+    const msg = await invoke<string>("inspector_launch_scrcpy", {
+      serial: deviceSelect.value || null,
+    });
+    showBanner(msg, true);
+  } catch (err) {
+    showBanner(String(err));
+  }
+}
+
+function flattenUiNodes(nodes: UiNode[], out: UiNode[] = []): UiNode[] {
+  for (const n of nodes) {
+    out.push(n);
+    flattenUiNodes(n.children, out);
+  }
+  return out;
+}
+
+async function captureLayout() {
+  hideBanner();
+  layoutCaptureBtn.disabled = true;
+  layoutCaptureBtn.textContent = "Capturing…";
+  try {
+    const snap = await invoke<LayoutSnapshot>("inspector_capture_layout", {
+      serial: deviceSelect.value || null,
+    });
+    layoutSnapshot = snap;
+    flatUiNodes = flattenUiNodes(snap.roots);
+    layoutCountEl.textContent = String(snap.node_count);
+    selectedUiNodeId = flatUiNodes[0]?.id ?? null;
+    hoveredUiNodeId = null;
+    renderLayoutInspector();
+  } catch (err) {
+    showBanner(`Layout capture failed: ${String(err)}`);
+  } finally {
+    layoutCaptureBtn.disabled = false;
+    layoutCaptureBtn.textContent = "Capture Screen";
+  }
+}
+
+function renderLayoutInspector() {
+  if (!layoutSnapshot) return;
+  const snap = layoutSnapshot;
+
+  // Screenshot + interactive SVG overlay
+  layoutStageEl.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "layout-shot-wrap";
+
+  const img = document.createElement("img");
+  img.className = "layout-shot-img";
+  img.src = snap.screenshot_data_url;
+  img.style.maxHeight = dockEl.classList.contains("expanded") ? "420px" : "172px";
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("class", "layout-svg-overlay");
+  svg.setAttribute("viewBox", `0 0 ${snap.screen_width} ${snap.screen_height}`);
+
+  for (const node of flatUiNodes) {
+    const w = node.bounds.right - node.bounds.left;
+    const h = node.bounds.bottom - node.bounds.top;
+    if (w <= 0 || h <= 0) continue;
+    const rect = document.createElementNS(svgNS, "rect");
+    rect.setAttribute("x", String(node.bounds.left));
+    rect.setAttribute("y", String(node.bounds.top));
+    rect.setAttribute("width", String(w));
+    rect.setAttribute("height", String(h));
+    rect.setAttribute("data-id", node.id);
+    let cls = "ui-rect";
+    if (node.id === selectedUiNodeId) cls += " selected";
+    else if (node.id === hoveredUiNodeId) cls += " hovered";
+    rect.setAttribute("class", cls);
+    svg.appendChild(rect);
+  }
+
+  const hitTest = (e: MouseEvent): UiNode | null => {
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const x = ((e.clientX - rect.left) / rect.width) * snap.screen_width;
+    const y = ((e.clientY - rect.top) / rect.height) * snap.screen_height;
+    let best: UiNode | null = null;
+    let bestArea = Infinity;
+    for (const n of flatUiNodes) {
+      if (x >= n.bounds.left && x <= n.bounds.right && y >= n.bounds.top && y <= n.bounds.bottom) {
+        const area = Math.max(1, (n.bounds.right - n.bounds.left) * (n.bounds.bottom - n.bounds.top));
+        if (area <= bestArea) {
+          bestArea = area;
+          best = n;
+        }
+      }
+    }
+    return best;
+  };
+
+  svg.onmousemove = (e) => {
+    const hit = hitTest(e);
+    const nextHover = hit?.id ?? null;
+    if (nextHover !== hoveredUiNodeId) {
+      hoveredUiNodeId = nextHover;
+      updateOverlayHighlights(svg);
+    }
+  };
+  svg.onmouseleave = () => {
+    if (hoveredUiNodeId !== null) {
+      hoveredUiNodeId = null;
+      updateOverlayHighlights(svg);
+    }
+  };
+  svg.onclick = (e) => {
+    const hit = hitTest(e);
+    if (hit) {
+      selectedUiNodeId = hit.id;
+      updateOverlayHighlights(svg);
+      renderLayoutTree();
+      renderLayoutProps(hit);
+    }
+  };
+
+  wrap.append(img, svg);
+  layoutStageEl.appendChild(wrap);
+
+  renderLayoutTree();
+  const sel = flatUiNodes.find((n) => n.id === selectedUiNodeId) ?? null;
+  if (sel) renderLayoutProps(sel);
+}
+
+function updateOverlayHighlights(svg: SVGSVGElement) {
+  svg.querySelectorAll<SVGRectElement>(".ui-rect").forEach((r) => {
+    const id = r.getAttribute("data-id");
+    let cls = "ui-rect";
+    if (id === selectedUiNodeId) cls += " selected";
+    else if (id === hoveredUiNodeId) cls += " hovered";
+    r.setAttribute("class", cls);
+  });
+}
+
+function renderLayoutTree() {
+  layoutTreeEl.innerHTML = "";
+  if (!layoutSnapshot) return;
+  const filter = layoutFilterInput.value.trim().toLowerCase();
+
+  const walk = (nodes: UiNode[], depth: number) => {
+    for (const n of nodes) {
+      const shortCls = n.class_name.split(".").pop() ?? n.class_name;
+      const shortRes = n.resource_id.includes("/")
+        ? n.resource_id.split("/").pop() ?? ""
+        : n.resource_id;
+      const matches =
+        !filter ||
+        shortCls.toLowerCase().includes(filter) ||
+        shortRes.toLowerCase().includes(filter) ||
+        n.text.toLowerCase().includes(filter) ||
+        n.content_desc.toLowerCase().includes(filter);
+
+      if (matches) {
+        const row = document.createElement("div");
+        row.className = "ui-tree-row" + (n.id === selectedUiNodeId ? " selected" : "");
+        row.style.paddingLeft = `${8 + depth * 12}px`;
+        let html = `<span class="ui-cls">${escapeHtml(shortCls)}</span>`;
+        if (shortRes) html += ` <span class="ui-res">#${escapeHtml(shortRes)}</span>`;
+        if (n.text) html += ` <span class="ui-txt">"${escapeHtml(n.text.slice(0, 32))}"</span>`;
+        row.innerHTML = html;
+        row.onclick = () => {
+          selectedUiNodeId = n.id;
+          renderLayoutTree();
+          renderLayoutProps(n);
+          const svg = layoutStageEl.querySelector<SVGSVGElement>(".layout-svg-overlay");
+          if (svg) updateOverlayHighlights(svg);
+        };
+        layoutTreeEl.appendChild(row);
+      }
+      walk(n.children, depth + 1);
+    }
+  };
+  walk(layoutSnapshot.roots, 0);
+}
+
+function renderLayoutProps(node: UiNode) {
+  layoutPropsEl.innerHTML = "";
+  const shortCls = node.class_name.split(".").pop() ?? node.class_name;
+  const head = document.createElement("div");
+  head.className = "prop-head";
+  const title = document.createElement("span");
+  title.textContent = shortCls;
+  const pin = makePinButton("Pin UI node to AI agent", () =>
+    pinContext({
+      kind: "ui_node",
+      title: node.resource_id || shortCls,
+      summary: `${shortCls} [${node.bounds.left},${node.bounds.top}][${node.bounds.right},${node.bounds.bottom}] ${node.text ? `"${node.text}"` : ""}`.trim(),
+      payload: { ...node, children: undefined },
+    }),
+  );
+  pin.style.opacity = "1";
+  head.append(title, pin);
+  layoutPropsEl.appendChild(head);
+
+  const w = node.bounds.right - node.bounds.left;
+  const h = node.bounds.bottom - node.bounds.top;
+  const rows: [string, string][] = [
+    ["class", node.class_name],
+    ["resource-id", node.resource_id || "—"],
+    ["text", node.text || "—"],
+    ["content-desc", node.content_desc || "—"],
+    ["bounds", `[${node.bounds.left}, ${node.bounds.top}] → [${node.bounds.right}, ${node.bounds.bottom}]`],
+    ["size", `${w} × ${h} px`],
+    [
+      "flags",
+      [
+        node.clickable && "clickable",
+        node.focused && "focused",
+        node.scrollable && "scrollable",
+        node.selected && "selected",
+        !node.enabled && "disabled",
+      ]
+        .filter(Boolean)
+        .join(", ") || "—",
+    ],
+  ];
+
+  for (const [k, v] of rows) {
+    const r = document.createElement("div");
+    r.className = "prop-row";
+    r.innerHTML = `<span class="prop-k">${escapeHtml(k)}</span><span class="prop-v">${escapeHtml(v)}</span>`;
+    layoutPropsEl.appendChild(r);
+  }
+}
+
+async function refreshAppStorage() {
+  const pkg = packageInput.value.trim();
+  if (!pkg) {
+    showBanner("Select a debuggable package first to browse storage.");
+    return;
+  }
+  hideBanner();
+  storageSidebarEl.innerHTML = `<div class="empty-hint">Loading storage…</div>`;
+  try {
+    storageIndex = await invoke<AppStorageIndex>("inspector_list_storage", {
+      serial: deviceSelect.value || null,
+      package: pkg,
+    });
+    sqliteTablesCache.clear();
+    renderStorageSidebar();
+  } catch (err) {
+    storageSidebarEl.innerHTML = `<div class="empty-hint">${escapeHtml(String(err))}</div>`;
+  }
+}
+
+function renderStorageSidebar() {
+  storageSidebarEl.innerHTML = "";
+  if (!storageIndex) return;
+  const idx = storageIndex;
+  const total = idx.shared_prefs.length + idx.datastores.length + idx.databases.length;
+  if (total === 0) {
+    storageSidebarEl.innerHTML = `<div class="empty-hint">No SharedPreferences, DataStore, or SQLite files found for ${escapeHtml(idx.package)}</div>`;
+    return;
+  }
+
+  if (idx.shared_prefs.length > 0) {
+    const lbl = document.createElement("div");
+    lbl.className = "storage-group-label";
+    lbl.textContent = "SharedPreferences";
+    storageSidebarEl.appendChild(lbl);
+    for (const file of idx.shared_prefs) {
+      const row = document.createElement("div");
+      row.className =
+        "storage-item" +
+        (activeStorageSelection?.kind === "shared_prefs" && activeStorageSelection.file === file
+          ? " active"
+          : "");
+      row.textContent = file;
+      row.onclick = () => void openSharedPrefs(file);
+      storageSidebarEl.appendChild(row);
+    }
+  }
+
+  if (idx.datastores.length > 0) {
+    const lbl = document.createElement("div");
+    lbl.className = "storage-group-label";
+    lbl.textContent = "DataStore";
+    storageSidebarEl.appendChild(lbl);
+    for (const file of idx.datastores) {
+      const row = document.createElement("div");
+      row.className =
+        "storage-item" +
+        (activeStorageSelection?.kind === "datastore" && activeStorageSelection.file === file
+          ? " active"
+          : "");
+      row.textContent = file;
+      row.onclick = () => void openDatastore(file);
+      storageSidebarEl.appendChild(row);
+    }
+  }
+
+  if (idx.databases.length > 0) {
+    const lbl = document.createElement("div");
+    lbl.className = "storage-group-label";
+    lbl.textContent = "SQLite Databases";
+    storageSidebarEl.appendChild(lbl);
+    for (const db of idx.databases) {
+      const dbRow = document.createElement("div");
+      dbRow.className = "storage-item";
+      const expanded = sqliteTablesCache.has(db);
+      dbRow.innerHTML = `${expanded ? CHEVRON_DOWN : CHEVRON_RIGHT}<span>${escapeHtml(db)}</span>`;
+      dbRow.onclick = async () => {
+        if (sqliteTablesCache.has(db)) {
+          sqliteTablesCache.delete(db);
+          renderStorageSidebar();
+        } else {
+          try {
+            const tables = await invoke<string[]>("inspector_list_sqlite_tables", {
+              serial: deviceSelect.value || null,
+              package: idx.package,
+              dbName: db,
+            });
+            sqliteTablesCache.set(db, tables);
+            renderStorageSidebar();
+          } catch (err) {
+            showBanner(String(err));
+          }
+        }
+      };
+      storageSidebarEl.appendChild(dbRow);
+
+      const tables = sqliteTablesCache.get(db);
+      if (tables) {
+        for (const tbl of tables) {
+          const tRow = document.createElement("div");
+          tRow.className =
+            "storage-item storage-table-item" +
+            (activeStorageSelection?.kind === "sqlite" &&
+            activeStorageSelection.db === db &&
+            activeStorageSelection.table === tbl
+              ? " active"
+              : "");
+          tRow.textContent = tbl;
+          tRow.onclick = () => void openSqliteTable(db, tbl, false);
+          storageSidebarEl.appendChild(tRow);
+        }
+      }
+    }
+  }
+}
+
+async function openSharedPrefs(file: string) {
+  if (!storageIndex) return;
+  try {
+    const entries = await invoke<PrefEntry[]>("inspector_read_shared_prefs", {
+      serial: deviceSelect.value || null,
+      package: storageIndex.package,
+      fileName: file,
+    });
+    activeStorageSelection = { kind: "shared_prefs", file, entries };
+    renderStorageSidebar();
+    renderStorageContent();
+  } catch (err) {
+    showBanner(String(err));
+  }
+}
+
+async function openDatastore(file: string) {
+  if (!storageIndex) return;
+  try {
+    const entries = await invoke<PrefEntry[]>("inspector_read_datastore", {
+      serial: deviceSelect.value || null,
+      package: storageIndex.package,
+      fileName: file,
+    });
+    activeStorageSelection = { kind: "datastore", file, entries };
+    renderStorageSidebar();
+    renderStorageContent();
+  } catch (err) {
+    showBanner(String(err));
+  }
+}
+
+async function openSqliteTable(db: string, tableOrSql: string, isCustomSql: boolean) {
+  if (!storageIndex) return;
+  try {
+    const data = await invoke<SqliteTableData>("inspector_query_sqlite", {
+      serial: deviceSelect.value || null,
+      package: storageIndex.package,
+      dbName: db,
+      tableOrSql,
+      isCustomSql,
+      limit: 100,
+    });
+    activeStorageSelection = { kind: "sqlite", db, table: data.table, data };
+    if (!isCustomSql) {
+      storageSqlInput.value = `SELECT * FROM "${tableOrSql}" LIMIT 100;`;
+    }
+    renderStorageSidebar();
+    renderStorageContent();
+  } catch (err) {
+    showBanner(String(err));
+  }
+}
+
+function renderStorageContent() {
+  storageContentEl.innerHTML = "";
+  const sel = activeStorageSelection;
+  if (!sel) {
+    storageSqlBar.classList.add("hidden");
+    storageContentEl.innerHTML = `<div class="empty-hint">Select a preferences file or SQLite table</div>`;
+    return;
+  }
+
+  const filter = storageFilterInput.value.trim().toLowerCase();
+
+  if (sel.kind === "shared_prefs" || sel.kind === "datastore") {
+    storageSqlBar.classList.add("hidden");
+    const rows = filter
+      ? sel.entries.filter(
+          (e) =>
+            e.key.toLowerCase().includes(filter) || e.value.toLowerCase().includes(filter),
+        )
+      : sel.entries;
+
+    const table = document.createElement("table");
+    table.className = "data-table";
+    table.innerHTML = `<thead><tr><th>Key</th><th>Type</th><th>Value</th><th></th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+    for (const e of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${escapeHtml(e.key)}</td><td class="muted">${escapeHtml(e.value_type)}</td><td>${escapeHtml(e.value)}</td>`;
+      const tdPin = document.createElement("td");
+      tdPin.appendChild(
+        makePinButton("Pin preference entry to AI agent", () =>
+          pinContext({
+            kind: "storage_entry",
+            title: `${sel.file}:${e.key}`,
+            summary: `${e.key} (${e.value_type}) = ${e.value}`,
+            payload: { source: sel.kind, file: sel.file, ...e },
+          }),
+        ),
+      );
+      tr.appendChild(tdPin);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    storageContentEl.appendChild(table);
+    return;
+  }
+
+  // SQLite data table
+  storageSqlBar.classList.remove("hidden");
+  const { columns, rows } = sel.data;
+  const visible = filter
+    ? rows.filter((r) => r.some((cell) => cell.toLowerCase().includes(filter)))
+    : rows;
+
+  const table = document.createElement("table");
+  table.className = "data-table";
+  const thead = document.createElement("thead");
+  const headTr = document.createElement("tr");
+  for (const col of columns) {
+    const th = document.createElement("th");
+    th.textContent = col;
+    headTr.appendChild(th);
+  }
+  thead.appendChild(headTr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const r of visible) {
+    const tr = document.createElement("tr");
+    for (const cell of r) {
+      const td = document.createElement("td");
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  storageContentEl.appendChild(table);
+}
+
 // --- Session Actions ---
 
 async function startSession(mode: "auto" | "attach" | "launch") {
@@ -1331,6 +1898,7 @@ async function runStep(depth: "over" | "into" | "out") {
 // --- Event Wiring ---
 
 refreshDevicesBtn.onclick = () => void refreshDevices();
+scrcpyBtn.onclick = () => void launchScrcpyMirror();
 deviceSelect.onchange = () => void refreshPackages();
 packageInput.oninput = () => updateGuideChecklist();
 
@@ -1504,12 +2072,39 @@ document.querySelectorAll<HTMLButtonElement>(".dock-tab").forEach((btn) => {
     document.querySelectorAll(".dock-panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById(`tab-${tab}`)?.classList.add("active");
-    const controls = document.getElementById("logcat-controls")!;
-    const pinnedControls = document.getElementById("pinned-controls")!;
-    controls.classList.toggle("hidden", tab !== "logcat");
-    pinnedControls.classList.toggle("hidden", tab !== "pinned");
+    document.getElementById("logcat-controls")!.classList.toggle("hidden", tab !== "logcat");
+    document.getElementById("pinned-controls")!.classList.toggle("hidden", tab !== "pinned");
+    document.getElementById("layout-controls")!.classList.toggle("hidden", tab !== "layout");
+    document.getElementById("storage-controls")!.classList.toggle("hidden", tab !== "storage");
+
+    if (tab === "storage" && !storageIndex && packageInput.value.trim()) {
+      void refreshAppStorage();
+    }
   };
 });
+
+dockExpandBtn.onclick = () => {
+  const expanded = dockEl.classList.toggle("expanded");
+  dockExpandBtn.textContent = expanded ? "Restore" : "Expand";
+  if (layoutSnapshot) {
+    renderLayoutInspector();
+  }
+};
+
+layoutCaptureBtn.onclick = () => void captureLayout();
+layoutFilterInput.oninput = () => renderLayoutTree();
+storageRefreshBtn.onclick = () => void refreshAppStorage();
+storageFilterInput.oninput = () => renderStorageContent();
+storageSqlRunBtn.onclick = () => {
+  if (activeStorageSelection?.kind === "sqlite") {
+    void openSqliteTable(activeStorageSelection.db, storageSqlInput.value, true);
+  }
+};
+storageSqlInput.onkeydown = (e) => {
+  if (e.key === "Enter" && activeStorageSelection?.kind === "sqlite") {
+    void openSqliteTable(activeStorageSelection.db, storageSqlInput.value, true);
+  }
+};
 
 logcatLevelSelect.onchange = () => renderAllLogs();
 logcatTagInput.oninput = () => renderAllLogs();

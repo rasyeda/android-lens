@@ -4,6 +4,7 @@ members = [
     "crates/adb-bridge",
     "crates/jdwp-client",
     "crates/logcat-stream",
+    "crates/app-inspector",
     "crates/mcp-server",
     "crates/cli-poc",
     "apps/desktop/src-tauri",
@@ -20,3 +21,4 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
