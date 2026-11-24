@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { AppearanceManager, THEMES, ThemeId } from "./appearance";
 import { BreakpointMark, SourceViewer } from "./editor";
+import { LayoutManager } from "./layout";
 
 interface AdbDevice {
   serial: string;
@@ -115,6 +117,13 @@ interface PinnedItem {
   pinned_at_ms: number;
 }
 
+interface McpStatusDto {
+  running: boolean;
+  port: number;
+  endpoint: string;
+  pinned_count: number;
+}
+
 interface UiBounds {
   left: number;
   top: number;
@@ -169,11 +178,11 @@ interface SqliteTableData {
   total_rows: number;
 }
 
-interface McpStatusDto {
-  running: boolean;
-  port: number;
-  endpoint: string;
-  pinned_count: number;
+interface CommandItem {
+  id: string;
+  label: string;
+  shortcut?: string;
+  run: () => void | Promise<void>;
 }
 
 type DebugUiEvent =
@@ -221,14 +230,14 @@ const SYSTEM_FRAME_PREFIXES = [
 ];
 
 const MAX_RENDERED_LOGS = 1500;
+const SOURCE_REF_RE = /\b([A-Za-z0-9_$]+\.(?:kt|java)):(\d+)\b/g;
 
 const CHEVRON_RIGHT = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>`;
 const CHEVRON_DOWN = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>`;
 const PIN_ICON = `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.8 2.2 13.8 6.2l-1.5 1.5-1-.3-2.5 2.5.4 1.6-1.2 1.2-2.7-2.7-2.6 2.6-.7-.7 2.6-2.6-2.7-2.7 1.2-1.2 1.6.4 2.5-2.5-.3-1 1.5-1.5z"/></svg>`;
-const MOON_PATH = `<path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" />`;
-const SUN_PATH = `<circle cx="8" cy="8" r="3" /><path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M12.4 3.6l-1.05 1.05M4.65 11.35 3.6 12.4" />`;
 
 // DOM refs
+const appEl = document.getElementById("app") as HTMLDivElement;
 const deviceSelect = document.getElementById("device-select") as HTMLSelectElement;
 const refreshDevicesBtn = document.getElementById("refresh-devices-btn") as HTMLButtonElement;
 const scrcpyBtn = document.getElementById("scrcpy-btn") as HTMLButtonElement;
@@ -258,15 +267,28 @@ const mcpPopover = document.getElementById("mcp-popover") as HTMLDivElement;
 const mcpPopEndpoint = document.getElementById("mcp-pop-endpoint") as HTMLSpanElement;
 const mcpSnippet = document.getElementById("mcp-snippet") as HTMLPreElement;
 const mcpCopyBtn = document.getElementById("mcp-copy-btn") as HTMLButtonElement;
-const mcpCopyFeedback = document.getElementById("mcp-copy-feedback") as HTMLSpanElement;
+
+const cmdPaletteBtn = document.getElementById("cmd-palette-btn") as HTMLButtonElement;
 const toggleLeftBtn = document.getElementById("toggle-left-btn") as HTMLButtonElement;
 const toggleDockBtn = document.getElementById("toggle-dock-btn") as HTMLButtonElement;
-const themeToggleBtn = document.getElementById("theme-toggle-btn") as HTMLButtonElement;
-const themeIcon = document.getElementById("theme-icon") as unknown as SVGSVGElement;
+const toggleRightBtn = document.getElementById("toggle-right-btn") as HTMLButtonElement;
+
+const appearanceBtn = document.getElementById("appearance-btn") as HTMLButtonElement;
+const appearancePopover = document.getElementById("appearance-popover") as HTMLDivElement;
+const themeListEl = document.getElementById("theme-list") as HTMLDivElement;
+const fontDecBtn = document.getElementById("font-dec-btn") as HTMLButtonElement;
+const fontIncBtn = document.getElementById("font-inc-btn") as HTMLButtonElement;
+const fontResetBtn = document.getElementById("font-reset-btn") as HTMLButtonElement;
+const fontSizeLabel = document.getElementById("font-size-label") as HTMLSpanElement;
+const resetLayoutBtn = document.getElementById("reset-layout-btn") as HTMLButtonElement;
+const shortcutsOpenBtn = document.getElementById("shortcuts-open-btn") as HTMLButtonElement;
+
 const banner = document.getElementById("banner") as HTMLDivElement;
+const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 
 const workspaceEl = document.getElementById("workspace") as HTMLElement;
 const dockEl = document.getElementById("dock") as HTMLElement;
+const splitDockEl = document.getElementById("split-dock") as HTMLDivElement;
 
 const quickOpenBtn = document.getElementById("quick-open-btn") as HTMLButtonElement;
 const openFolderBtn = document.getElementById("open-folder-btn") as HTMLButtonElement;
@@ -285,10 +307,18 @@ const guideFolderSub = document.getElementById("guide-folder-sub") as HTMLDivEle
 const editorTabsEl = document.getElementById("editor-tabs") as HTMLDivElement;
 const editorContainer = document.getElementById("editor-container") as HTMLDivElement;
 const editorEmpty = document.getElementById("editor-empty") as HTMLDivElement;
+const findBarEl = document.getElementById("editor-find-bar") as HTMLDivElement;
+const findInput = document.getElementById("find-input") as HTMLInputElement;
+const findCountEl = document.getElementById("find-count") as HTMLSpanElement;
+const findCaseBtn = document.getElementById("find-case-btn") as HTMLButtonElement;
+const findPrevBtn = document.getElementById("find-prev-btn") as HTMLButtonElement;
+const findNextBtn = document.getElementById("find-next-btn") as HTMLButtonElement;
+const findCloseBtn = document.getElementById("find-close-btn") as HTMLButtonElement;
 
 const threadSelect = document.getElementById("thread-select") as HTMLSelectElement;
 const dimSystemBtn = document.getElementById("dim-system-btn") as HTMLButtonElement;
 const stackListEl = document.getElementById("stack-list") as HTMLDivElement;
+const varsFilterInput = document.getElementById("vars-filter-input") as HTMLInputElement;
 const varsTreeEl = document.getElementById("vars-tree") as HTMLDivElement;
 const varsFrameLabelEl = document.getElementById("vars-frame-label") as HTMLSpanElement;
 
@@ -328,7 +358,20 @@ const quickOpenBackdrop = document.getElementById("quick-open-backdrop") as HTML
 const quickOpenInput = document.getElementById("quick-open-input") as HTMLInputElement;
 const quickOpenResults = document.getElementById("quick-open-results") as HTMLDivElement;
 
-// State
+const cmdPaletteBackdrop = document.getElementById("cmd-palette-backdrop") as HTMLDivElement;
+const cmdPaletteInput = document.getElementById("cmd-palette-input") as HTMLInputElement;
+const cmdPaletteResults = document.getElementById("cmd-palette-results") as HTMLDivElement;
+
+const gotoLineBackdrop = document.getElementById("goto-line-backdrop") as HTMLDivElement;
+const gotoLineInput = document.getElementById("goto-line-input") as HTMLInputElement;
+
+const shortcutsBackdrop = document.getElementById("shortcuts-backdrop") as HTMLDivElement;
+const shortcutsCloseBtn = document.getElementById("shortcuts-close-btn") as HTMLButtonElement;
+
+// Managers & State
+const layout = new LayoutManager(appEl);
+const appearance = new AppearanceManager(() => renderAppearancePopover());
+
 let projectRoot: string | null = localStorage.getItem("android-lens:projectRoot");
 let projectFiles: ProjectFile[] = [];
 const expandedDirs = new Set<string>();
@@ -336,6 +379,7 @@ const dirCache = new Map<string, FsEntry[]>();
 
 const openFiles = new Map<string, SourceFileContent>();
 let activeFilePath: string | null = null;
+let findCaseSensitive = false;
 
 let currentStatus: SessionStatus = {
   state: "disconnected",
@@ -348,10 +392,12 @@ let currentStatus: SessionStatus = {
   paused_location: null,
 };
 
+let lastDevicesSignature = "";
 let breakpoints: BreakpointDto[] = [];
 let selectedThreadId: string | null = null;
 let selectedFrameIndex = 0;
 let cachedFrames: StackFrameDto[] = [];
+let cachedLocals: VariableDto[] = [];
 let dimSystemFrames = true;
 let execHighlight: { fileName: string; line: number } | null = null;
 
@@ -375,6 +421,8 @@ let activeStorageSelection:
 
 let paletteMatches: ProjectFile[] = [];
 let paletteIndex = 0;
+let cmdMatches: CommandItem[] = [];
+let cmdIndex = 0;
 
 const viewer = new SourceViewer(editorContainer, async (fileName, line) => {
   try {
@@ -383,17 +431,59 @@ const viewer = new SourceViewer(editorContainer, async (fileName, line) => {
       line,
     });
     updateBreakpoints(updated);
+    persistProjectBreakpoints();
   } catch (err) {
     showBanner(`Breakpoint error: ${String(err)}`);
   }
 });
 
-// --- Theme & Layout Persistence ---
+// --- Toasts & Banners ---
 
-function applyTheme(theme: "dark" | "light") {
-  document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem("android-lens:theme", theme);
-  themeIcon.innerHTML = theme === "dark" ? SUN_PATH : MOON_PATH;
+function showToast(text: string, variant: "default" | "ok" | "error" = "default") {
+  const el = document.createElement("div");
+  el.className = `toast ${variant}`;
+  el.textContent = text;
+  toastContainer.appendChild(el);
+  setTimeout(() => {
+    el.remove();
+  }, 2400);
+}
+
+function showBanner(text: string) {
+  banner.innerHTML = "";
+  const msg = document.createElement("span");
+  msg.textContent = text;
+  const close = document.createElement("button");
+  close.className = "btn btn-ghost-xs";
+  close.textContent = "Dismiss";
+  close.onclick = hideBanner;
+  banner.className = "banner";
+  banner.append(msg, close);
+}
+
+function hideBanner() {
+  banner.classList.add("hidden");
+}
+
+// --- Appearance & Panel Toggles ---
+
+function renderAppearancePopover() {
+  const activeId = appearance.getTheme();
+  themeListEl.innerHTML = "";
+  for (const t of THEMES) {
+    const btn = document.createElement("button");
+    btn.className = "theme-option" + (t.id === activeId ? " active" : "");
+    const swatches = t.swatches
+      .map((c) => `<span class="theme-swatch" style="background:${c}"></span>`)
+      .join("");
+    btn.innerHTML = `<span>${escapeHtml(t.label)}</span><span class="theme-swatches">${swatches}</span>`;
+    btn.onclick = () => {
+      appearance.setTheme(t.id);
+      showToast(`Theme: ${t.label}`);
+    };
+    themeListEl.appendChild(btn);
+  }
+  fontSizeLabel.textContent = `${appearance.getFontSize()}px`;
 }
 
 function toggleLeftPane(force?: boolean) {
@@ -403,27 +493,38 @@ function toggleLeftPane(force?: boolean) {
   localStorage.setItem("android-lens:leftCollapsed", collapsed ? "1" : "0");
 }
 
+function toggleRightPane(force?: boolean) {
+  const collapsed = force ?? !workspaceEl.classList.contains("right-collapsed");
+  workspaceEl.classList.toggle("right-collapsed", collapsed);
+  toggleRightBtn.classList.toggle("active", !collapsed);
+  localStorage.setItem("android-lens:rightCollapsed", collapsed ? "1" : "0");
+}
+
 function toggleDock(force?: boolean) {
   const collapsed = force ?? !dockEl.classList.contains("collapsed");
   dockEl.classList.toggle("collapsed", collapsed);
+  splitDockEl.classList.toggle("hidden", collapsed);
   toggleDockBtn.classList.toggle("active", !collapsed);
   localStorage.setItem("android-lens:dockCollapsed", collapsed ? "1" : "0");
 }
 
-function showBanner(text: string, isInfo = false) {
-  banner.innerHTML = "";
-  const msg = document.createElement("span");
-  msg.textContent = text;
-  const close = document.createElement("button");
-  close.className = "btn btn-ghost-xs";
-  close.textContent = "Dismiss";
-  close.onclick = hideBanner;
-  banner.className = isInfo ? "banner info" : "banner";
-  banner.append(msg, close);
-}
+function selectDockTab(tab: "logcat" | "crashes" | "breakpoints" | "pinned" | "layout" | "storage") {
+  if (dockEl.classList.contains("collapsed")) {
+    toggleDock(false);
+  }
+  document.querySelectorAll<HTMLButtonElement>(".dock-tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+  document.querySelectorAll(".dock-panel").forEach((p) => p.classList.remove("active"));
+  document.getElementById(`tab-${tab}`)?.classList.add("active");
+  document.getElementById("logcat-controls")!.classList.toggle("hidden", tab !== "logcat");
+  document.getElementById("pinned-controls")!.classList.toggle("hidden", tab !== "pinned");
+  document.getElementById("layout-controls")!.classList.toggle("hidden", tab !== "layout");
+  document.getElementById("storage-controls")!.classList.toggle("hidden", tab !== "storage");
 
-function hideBanner() {
-  banner.classList.add("hidden");
+  if (tab === "storage" && !storageIndex && packageInput.value.trim()) {
+    void refreshAppStorage();
+  }
 }
 
 function updateGuideChecklist() {
@@ -448,11 +549,15 @@ function updateGuideChecklist() {
     : "Open your project to browse .kt / .java files & click gutters for breakpoints";
 }
 
-// --- ADB Devices & Packages ---
+// --- ADB Devices & Auto-Detection ---
 
-async function refreshDevices() {
+async function refreshDevices(silent = false) {
   try {
     const devices = await invoke<AdbDevice[]>("adb_list_devices");
+    const sig = devices.map((d) => `${d.serial}:${d.state}:${d.model ?? ""}`).join("|");
+    if (silent && sig === lastDevicesSignature) return;
+    lastDevicesSignature = sig;
+
     const prev = deviceSelect.value;
     deviceSelect.innerHTML = "";
     if (devices.length === 0) {
@@ -475,7 +580,7 @@ async function refreshDevices() {
     await refreshPackages();
     updateGuideChecklist();
   } catch (err) {
-    showBanner(`ADB error: ${String(err)}`);
+    if (!silent) showBanner(`ADB error: ${String(err)}`);
   }
 }
 
@@ -502,7 +607,42 @@ async function refreshPackages() {
   }
 }
 
-// --- Project Folder & File Tree ---
+// --- Project Folder, Persistent Breakpoints & File Tree ---
+
+function bpStorageKey(): string | null {
+  return projectRoot ? `android-lens:bps:${projectRoot}` : null;
+}
+
+function persistProjectBreakpoints() {
+  const key = bpStorageKey();
+  if (!key) return;
+  const saved = breakpoints.map((b) => ({ file: b.file, line: b.line }));
+  localStorage.setItem(key, JSON.stringify(saved));
+}
+
+async function restoreProjectBreakpoints() {
+  const key = bpStorageKey();
+  if (!key) return;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as { file: string; line: number }[];
+    for (const item of saved) {
+      const exists = breakpoints.some(
+        (b) => b.file.toLowerCase() === item.file.toLowerCase() && b.line === item.line,
+      );
+      if (!exists) {
+        const updated = await invoke<BreakpointDto[]>("debug_toggle_breakpoint", {
+          file: item.file,
+          line: item.line,
+        });
+        updateBreakpoints(updated);
+      }
+    }
+  } catch {
+    // Ignore invalid saved breakpoints
+  }
+}
 
 async function openProjectFolder(path: string) {
   projectRoot = path;
@@ -517,8 +657,8 @@ async function openProjectFolder(path: string) {
   await loadDir(path);
   renderFileTree();
   updateGuideChecklist();
+  await restoreProjectBreakpoints();
 
-  // Populate ⌘P Quick Open index asynchronously without blocking UI
   invoke<ProjectFile[]>("fs_list_project_files", { projectRoot: path })
     .then((files) => {
       projectFiles = files;
@@ -533,6 +673,7 @@ async function pickFolder() {
     const selected = await openDialog({ directory: true, multiple: false });
     if (typeof selected === "string" && selected) {
       await openProjectFolder(selected);
+      showToast("Project folder opened", "ok");
     }
   } catch (err) {
     showBanner(`Folder picker error: ${String(err)}`);
@@ -614,22 +755,26 @@ function renderFileTree() {
   renderLevel(projectRoot, 0);
 }
 
-// --- ⌘P Quick Open Palette ---
+// --- ⌘P Quick Open, ⌘K Command Palette, ⌃G Go to Line, ⌘/ Shortcuts ---
+
+function closeAllModals() {
+  quickOpenBackdrop.classList.add("hidden");
+  cmdPaletteBackdrop.classList.add("hidden");
+  gotoLineBackdrop.classList.add("hidden");
+  shortcutsBackdrop.classList.add("hidden");
+}
 
 function openQuickOpen() {
   if (!projectRoot) {
     void pickFolder();
     return;
   }
+  closeAllModals();
   quickOpenBackdrop.classList.remove("hidden");
   quickOpenInput.value = "";
   paletteIndex = 0;
   renderPaletteResults();
   quickOpenInput.focus();
-}
-
-function closeQuickOpen() {
-  quickOpenBackdrop.classList.add("hidden");
 }
 
 function renderPaletteResults() {
@@ -655,11 +800,153 @@ function renderPaletteResults() {
     item.className = "palette-item" + (idx === paletteIndex ? " selected" : "");
     item.innerHTML = `<span class="palette-name">${escapeHtml(f.name)}</span><span class="palette-path">${escapeHtml(f.rel_path)}</span>`;
     item.onclick = () => {
-      closeQuickOpen();
+      closeAllModals();
       void openSourceFile(f.abs_path);
     };
     quickOpenResults.appendChild(item);
   });
+}
+
+function getCommands(): CommandItem[] {
+  const cmds: CommandItem[] = [
+    { id: "open-folder", label: "Open Project Folder…", run: () => pickFolder() },
+    { id: "quick-open", label: "Quick Open File…", shortcut: "⌘P", run: () => openQuickOpen() },
+    { id: "find", label: "Find in Current File", shortcut: "⌘F", run: () => openFindBar() },
+    { id: "goto-line", label: "Go to Line…", shortcut: "⌃G", run: () => openGotoLine() },
+    { id: "debug-auto", label: "Debug App (Auto Attach / Launch)", run: () => startSession("auto") },
+    { id: "debug-launch", label: "Fresh Launch & Wait for Debugger", run: () => startSession("launch") },
+    { id: "refresh-adb", label: "Refresh ADB Devices & Packages", run: () => refreshDevices() },
+    { id: "scrcpy", label: "Mirror Device with scrcpy", run: () => launchScrcpyMirror() },
+    {
+      id: "capture-layout",
+      label: "Capture Screen & View Hierarchy",
+      run: () => {
+        selectDockTab("layout");
+        return captureLayout();
+      },
+    },
+    {
+      id: "refresh-storage",
+      label: "Inspect App Storage (Prefs / DataStore / SQLite)",
+      run: () => {
+        selectDockTab("storage");
+        return refreshAppStorage();
+      },
+    },
+    { id: "toggle-left", label: "Toggle Files Rail", shortcut: "⌘B", run: () => toggleLeftPane() },
+    { id: "toggle-dock", label: "Toggle Bottom Dock", shortcut: "⌘J", run: () => toggleDock() },
+    { id: "toggle-right", label: "Toggle Right Inspector", shortcut: "⌘⌥B", run: () => toggleRightPane() },
+    {
+      id: "reset-layout",
+      label: "Reset Pane Sizes to Default",
+      run: () => {
+        layout.reset();
+        showToast("Pane sizes reset", "ok");
+      },
+    },
+    {
+      id: "font-inc",
+      label: "Increase Code Font Size",
+      shortcut: "⌘+",
+      run: () => appearance.adjustFontSize(1),
+    },
+    {
+      id: "font-dec",
+      label: "Decrease Code Font Size",
+      shortcut: "⌘−",
+      run: () => appearance.adjustFontSize(-1),
+    },
+    {
+      id: "copy-mcp",
+      label: "Copy MCP Config for Claude Code / Antigravity",
+      run: () => copyMcpConfig(),
+    },
+    { id: "shortcuts", label: "Show Keyboard Shortcuts", shortcut: "⌘/", run: () => openShortcuts() },
+  ];
+
+  for (const t of THEMES) {
+    cmds.push({
+      id: `theme-${t.id}`,
+      label: `Theme: ${t.label}`,
+      run: () => {
+        appearance.setTheme(t.id as ThemeId);
+        showToast(`Theme: ${t.label}`);
+      },
+    });
+  }
+  return cmds;
+}
+
+function openCommandPalette() {
+  closeAllModals();
+  cmdPaletteBackdrop.classList.remove("hidden");
+  cmdPaletteInput.value = "";
+  cmdIndex = 0;
+  renderCommandResults();
+  cmdPaletteInput.focus();
+}
+
+function renderCommandResults() {
+  const q = cmdPaletteInput.value.trim().toLowerCase();
+  const all = getCommands();
+  cmdMatches = q ? all.filter((c) => c.label.toLowerCase().includes(q)) : all;
+  if (cmdIndex >= cmdMatches.length) cmdIndex = 0;
+  cmdPaletteResults.innerHTML = "";
+
+  if (cmdMatches.length === 0) {
+    cmdPaletteResults.innerHTML = `<div class="empty-hint">No matching commands</div>`;
+    return;
+  }
+
+  cmdMatches.forEach((c, idx) => {
+    const row = document.createElement("div");
+    row.className = "palette-item" + (idx === cmdIndex ? " selected" : "");
+    row.innerHTML = `<span class="palette-name">${escapeHtml(c.label)}</span>${c.shortcut ? `<kbd class="kbd">${escapeHtml(c.shortcut)}</kbd>` : ""}`;
+    row.onclick = () => {
+      closeAllModals();
+      void c.run();
+    };
+    cmdPaletteResults.appendChild(row);
+  });
+}
+
+function openGotoLine() {
+  if (!viewer.hasDocument()) {
+    showToast("Open a source file first");
+    return;
+  }
+  closeAllModals();
+  gotoLineBackdrop.classList.remove("hidden");
+  gotoLineInput.max = String(viewer.getLineCount());
+  gotoLineInput.placeholder = `Line 1 – ${viewer.getLineCount()}…`;
+  gotoLineInput.value = "";
+  gotoLineInput.focus();
+}
+
+function openShortcuts() {
+  closeAllModals();
+  shortcutsBackdrop.classList.remove("hidden");
+}
+
+// --- In-File Find (⌘F) ---
+
+function openFindBar() {
+  if (!viewer.hasDocument()) return;
+  findBarEl.classList.remove("hidden");
+  findInput.focus();
+  findInput.select();
+  runFind();
+}
+
+function closeFindBar() {
+  findBarEl.classList.add("hidden");
+  viewer.clearFind();
+  findCountEl.textContent = "0 / 0";
+}
+
+function runFind() {
+  const st = viewer.find(findInput.value, findCaseSensitive);
+  findCountEl.textContent = st.count > 0 ? `${st.index + 1} / ${st.count}` : "0 / 0";
 }
 
 // --- Source Viewer & Tabs ---
@@ -686,6 +973,9 @@ async function openSourceFile(path: string, focusLine?: number) {
     if (focusLine !== undefined) {
       viewer.scrollToLine(focusLine);
     }
+    if (!findBarEl.classList.contains("hidden") && findInput.value) {
+      runFind();
+    }
   } catch (err) {
     showBanner(`Could not open file: ${String(err)}`);
   }
@@ -708,7 +998,10 @@ async function openBySourceName(fileName: string, line: number, classHint?: stri
       return;
     }
   }
-  if (!projectRoot) return;
+  if (!projectRoot) {
+    showToast(`Open project folder to jump to ${fileName}:${line}`);
+    return;
+  }
   const found = await invoke<string | null>("fs_find_source_file", {
     projectRoot,
     fileName,
@@ -716,6 +1009,8 @@ async function openBySourceName(fileName: string, line: number, classHint?: stri
   });
   if (found) {
     await openSourceFile(found, line);
+  } else {
+    showToast(`${fileName} not found in project folder`);
   }
 }
 
@@ -741,6 +1036,7 @@ function renderEditorTabs() {
           void openSourceFile(next);
         } else {
           activeFilePath = null;
+          closeFindBar();
           viewer.destroy();
           editorEmpty.classList.remove("hidden");
           renderEditorTabs();
@@ -799,6 +1095,7 @@ function applyStatus(status: SessionStatus) {
     varsTreeEl.innerHTML = `<div class="empty-hint">Variables appear here when paused</div>`;
     varsFrameLabelEl.textContent = "";
     cachedFrames = [];
+    cachedLocals = [];
   } else if (status.state === "running") {
     statusText.textContent = `Running · PID ${status.pid ?? "?"}`;
     statusPill.title = status.vm_info ?? "";
@@ -916,6 +1213,27 @@ async function refreshCallStack(threadIdHex?: string) {
   }
 }
 
+function renderVariablesList() {
+  varsTreeEl.innerHTML = "";
+  const filter = varsFilterInput.value.trim().toLowerCase();
+  const visible = filter
+    ? cachedLocals.filter(
+        (v) =>
+          v.name.toLowerCase().includes(filter) ||
+          v.value.toLowerCase().includes(filter) ||
+          v.type_name.toLowerCase().includes(filter),
+      )
+    : cachedLocals;
+
+  if (visible.length === 0) {
+    varsTreeEl.innerHTML = `<div class="empty-hint">${cachedLocals.length === 0 ? "No local variables in scope" : "No variables match filter"}</div>`;
+    return;
+  }
+  for (const v of visible) {
+    varsTreeEl.appendChild(createVarNode(v, 0));
+  }
+}
+
 async function refreshLocals(
   threadIdHex: string | undefined,
   frameIndex: number,
@@ -923,25 +1241,17 @@ async function refreshLocals(
 ) {
   varsFrameLabelEl.textContent = frame ? `${frame.method_name}()` : `#${frameIndex}`;
   try {
-    const vars = await invoke<VariableDto[]>("debug_get_locals", {
+    cachedLocals = await invoke<VariableDto[]>("debug_get_locals", {
       threadIdHex: threadIdHex ?? null,
       frameIndex,
     });
-    varsTreeEl.innerHTML = "";
-    if (vars.length === 0) {
-      varsTreeEl.innerHTML = `<div class="empty-hint">No local variables in scope</div>`;
-      return;
-    }
-    for (const v of vars) {
-      varsTreeEl.appendChild(createVarNode(v, 0));
-    }
+    renderVariablesList();
   } catch (err) {
     varsTreeEl.innerHTML = `<div class="empty-hint">${escapeHtml(String(err))}</div>`;
   }
 }
 
 function formatReadableValue(v: VariableDto): string {
-  // Tuck raw `@0x...` address into tooltip; show short class name inline for objects
   if (v.object_id_hex && v.value.includes("@0x")) {
     const clsPart = v.value.split("@0x")[0];
     return clsPart.split(".").pop() ?? clsPart;
@@ -1004,6 +1314,25 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
     row.appendChild(owner);
   }
 
+  const actions = document.createElement("span");
+  actions.className = "var-actions";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "copy-btn";
+  copyBtn.title = "Copy raw value";
+  copyBtn.textContent = "Copy";
+  copyBtn.onclick = async (e) => {
+    e.stopPropagation();
+    const raw =
+      v.value.startsWith('"') && v.value.endsWith('"') ? v.value.slice(1, -1) : v.value;
+    try {
+      await navigator.clipboard.writeText(raw);
+      showToast(`Copied ${v.name}`, "ok");
+    } catch {
+      showToast("Copy failed", "error");
+    }
+  };
+
   const pinBtn = makePinButton("Pin variable to AI agent", () =>
     pinContext({
       kind: "variable",
@@ -1020,7 +1349,8 @@ function createVarNode(v: VariableDto, depth: number): HTMLElement {
       },
     }),
   );
-  row.appendChild(pinBtn);
+  actions.append(copyBtn, pinBtn);
+  row.appendChild(actions);
 
   container.appendChild(row);
 
@@ -1103,6 +1433,7 @@ function updateBreakpoints(next: BreakpointDto[]) {
       e.stopPropagation();
       const updated = await invoke<BreakpointDto[]>("debug_remove_breakpoint", { id: bp.id });
       updateBreakpoints(updated);
+      persistProjectBreakpoints();
     };
 
     row.append(left, rm);
@@ -1110,7 +1441,36 @@ function updateBreakpoints(next: BreakpointDto[]) {
   }
 }
 
-// --- Logcat & Crashes ---
+// --- Logcat & Crashes (with clickable Source.kt:line links!) ---
+
+function linkifySourceRefs(text: string): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  let lastIdx = 0;
+  SOURCE_REF_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SOURCE_REF_RE.exec(text)) !== null) {
+    if (m.index > lastIdx) {
+      frag.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
+    }
+    const fileName = m[1];
+    const lineNo = Number(m[2]);
+    const a = document.createElement("a");
+    a.className = "stack-link";
+    a.textContent = m[0];
+    a.title = `Jump to ${fileName}:${lineNo}`;
+    a.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void openBySourceName(fileName, lineNo);
+    };
+    frag.appendChild(a);
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) {
+    frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+  }
+  return frag;
+}
 
 function matchesLogFilter(entry: LogEntry): boolean {
   const minLevel = logcatLevelSelect.value as LogLevel;
@@ -1130,17 +1490,33 @@ function createLogRow(entry: LogEntry): HTMLElement {
   const row = document.createElement("div");
   row.className = `log-row ${entry.level}`;
   const letter = entry.level[0]?.toUpperCase() ?? "?";
-  row.innerHTML = `<span class="log-ts">${escapeHtml(entry.timestamp)}</span><span class="log-lvl ${entry.level}">${letter}</span><span class="log-tag" title="${escapeHtml(entry.tag)}">${escapeHtml(entry.tag)}</span><span>${escapeHtml(entry.message)}</span>`;
-  row.appendChild(
-    makePinButton("Pin logcat entry to AI agent", () =>
-      pinContext({
-        kind: "logcat_entry",
-        title: `${letter}/${entry.tag || "log"}`,
-        summary: `[${entry.timestamp}] ${entry.message}`,
-        payload: entry,
-      }),
-    ),
+
+  const ts = document.createElement("span");
+  ts.className = "log-ts";
+  ts.textContent = entry.timestamp;
+
+  const lvl = document.createElement("span");
+  lvl.className = `log-lvl ${entry.level}`;
+  lvl.textContent = letter;
+
+  const tag = document.createElement("span");
+  tag.className = "log-tag";
+  tag.title = entry.tag;
+  tag.textContent = entry.tag;
+
+  const msg = document.createElement("span");
+  msg.appendChild(linkifySourceRefs(entry.message));
+
+  const pin = makePinButton("Pin logcat entry to AI agent", () =>
+    pinContext({
+      kind: "logcat_entry",
+      title: `${letter}/${entry.tag || "log"}`,
+      summary: `[${entry.timestamp}] ${entry.message}`,
+      payload: entry,
+    }),
   );
+
+  row.append(ts, lvl, tag, msg, pin);
   return row;
 }
 
@@ -1214,7 +1590,7 @@ function renderCrashes() {
 
     const body = document.createElement("pre");
     body.className = "crash-stack";
-    body.textContent = crash.lines.join("\n");
+    body.appendChild(linkifySourceRefs(crash.lines.join("\n")));
 
     head.onclick = () => {
       body.style.display = body.style.display === "none" ? "block" : "none";
@@ -1282,6 +1658,7 @@ async function pinContext(req: {
       req: { ...req, note: null },
     });
     updatePinnedItems(items);
+    showToast(`Pinned "${req.title}" to Agent`, "ok");
   } catch (err) {
     showBanner(`Pin error: ${String(err)}`);
   }
@@ -1363,6 +1740,16 @@ async function refreshMcpStatus() {
   }
 }
 
+async function copyMcpConfig() {
+  await refreshMcpStatus();
+  try {
+    await navigator.clipboard.writeText(mcpSnippet.textContent ?? "");
+    showToast("MCP config copied", "ok");
+  } catch {
+    showToast("Select and copy config manually", "error");
+  }
+}
+
 // --- Phase 3: scrcpy, Visual Layout Inspector, and Storage Browser ---
 
 async function launchScrcpyMirror() {
@@ -1371,7 +1758,7 @@ async function launchScrcpyMirror() {
     const msg = await invoke<string>("inspector_launch_scrcpy", {
       serial: deviceSelect.value || null,
     });
-    showBanner(msg, true);
+    showToast(msg, "ok");
   } catch (err) {
     showBanner(String(err));
   }
@@ -1411,15 +1798,15 @@ function renderLayoutInspector() {
   if (!layoutSnapshot) return;
   const snap = layoutSnapshot;
 
-  // Screenshot + interactive SVG overlay
   layoutStageEl.innerHTML = "";
   const wrap = document.createElement("div");
   wrap.className = "layout-shot-wrap";
 
   const img = document.createElement("img");
   img.className = "layout-shot-img";
+  const dockHeight = dockEl.getBoundingClientRect().height || 224;
+  img.style.maxHeight = `${Math.max(120, Math.round(dockHeight - 54))}px`;
   img.src = snap.screenshot_data_url;
-  img.style.maxHeight = dockEl.classList.contains("expanded") ? "420px" : "172px";
 
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(svgNS, "svg");
@@ -1598,7 +1985,7 @@ function renderLayoutProps(node: UiNode) {
 async function refreshAppStorage() {
   const pkg = packageInput.value.trim();
   if (!pkg) {
-    showBanner("Select a debuggable package first to browse storage.");
+    showToast("Select a debuggable package first", "error");
     return;
   }
   hideBanner();
@@ -1811,7 +2198,6 @@ function renderStorageContent() {
     return;
   }
 
-  // SQLite data table
   storageSqlBar.classList.remove("hidden");
   const { columns, rows } = sel.data;
   const visible = filter
@@ -1905,6 +2291,8 @@ packageInput.oninput = () => updateGuideChecklist();
 debugAutoBtn.onclick = () => void startSession("auto");
 debugMenuBtn.onclick = (e) => {
   e.stopPropagation();
+  mcpPopover.classList.add("hidden");
+  appearancePopover.classList.add("hidden");
   debugMenu.classList.toggle("hidden");
 };
 debugMenu.querySelectorAll<HTMLButtonElement>(".popover-item").forEach((item) => {
@@ -1913,29 +2301,45 @@ debugMenu.querySelectorAll<HTMLButtonElement>(".popover-item").forEach((item) =>
     void startSession(mode);
   };
 });
+
 document.addEventListener("click", () => {
   debugMenu.classList.add("hidden");
   mcpPopover.classList.add("hidden");
+  appearancePopover.classList.add("hidden");
 });
 
 mcpPillBtn.onclick = async (e) => {
   e.stopPropagation();
   debugMenu.classList.add("hidden");
+  appearancePopover.classList.add("hidden");
   await refreshMcpStatus();
   mcpPopover.classList.toggle("hidden");
 };
 mcpPopover.onclick = (e) => e.stopPropagation();
-mcpCopyBtn.onclick = async () => {
-  try {
-    await navigator.clipboard.writeText(mcpSnippet.textContent ?? "");
-    mcpCopyFeedback.textContent = "Copied";
-    setTimeout(() => {
-      mcpCopyFeedback.textContent = "";
-    }, 1500);
-  } catch {
-    mcpCopyFeedback.textContent = "Select & copy above";
-  }
+mcpCopyBtn.onclick = () => void copyMcpConfig();
+
+appearanceBtn.onclick = (e) => {
+  e.stopPropagation();
+  debugMenu.classList.add("hidden");
+  mcpPopover.classList.add("hidden");
+  renderAppearancePopover();
+  appearancePopover.classList.toggle("hidden");
 };
+appearancePopover.onclick = (e) => e.stopPropagation();
+fontDecBtn.onclick = () => appearance.adjustFontSize(-1);
+fontIncBtn.onclick = () => appearance.adjustFontSize(1);
+fontResetBtn.onclick = () => appearance.resetFontSize();
+resetLayoutBtn.onclick = () => {
+  layout.reset();
+  appearancePopover.classList.add("hidden");
+  showToast("Pane sizes reset", "ok");
+};
+shortcutsOpenBtn.onclick = () => {
+  appearancePopover.classList.add("hidden");
+  openShortcuts();
+};
+
+cmdPaletteBtn.onclick = () => openCommandPalette();
 
 pinsClearBtn.onclick = async () => {
   const updated = await invoke<PinnedItem[]>("pin_clear");
@@ -1985,21 +2389,46 @@ dimSystemBtn.onclick = () => {
   renderCallStack();
 };
 
+varsFilterInput.oninput = () => renderVariablesList();
+
 openFolderBtn.onclick = () => void pickFolder();
 guideOpenBtn.onclick = () => void pickFolder();
 quickOpenBtn.onclick = () => openQuickOpen();
 treeFilterInput.oninput = () => renderFileTree();
 
 toggleLeftBtn.onclick = () => toggleLeftPane();
+toggleRightBtn.onclick = () => toggleRightPane();
 toggleDockBtn.onclick = () => toggleDock();
-themeToggleBtn.onclick = () => {
-  const cur = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
-  applyTheme(cur === "dark" ? "light" : "dark");
+
+// Find Bar events
+findInput.oninput = () => runFind();
+findInput.onkeydown = (e) => {
+  if (e.key === "Escape") {
+    closeFindBar();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const st = viewer.stepFind(e.shiftKey ? -1 : 1);
+    findCountEl.textContent = st.count > 0 ? `${st.index + 1} / ${st.count}` : "0 / 0";
+  }
 };
+findCaseBtn.onclick = () => {
+  findCaseSensitive = !findCaseSensitive;
+  findCaseBtn.classList.toggle("active", findCaseSensitive);
+  runFind();
+};
+findPrevBtn.onclick = () => {
+  const st = viewer.stepFind(-1);
+  findCountEl.textContent = st.count > 0 ? `${st.index + 1} / ${st.count}` : "0 / 0";
+};
+findNextBtn.onclick = () => {
+  const st = viewer.stepFind(1);
+  findCountEl.textContent = st.count > 0 ? `${st.index + 1} / ${st.count}` : "0 / 0";
+};
+findCloseBtn.onclick = () => closeFindBar();
 
 // Quick Open events
 quickOpenBackdrop.onclick = (e) => {
-  if (e.target === quickOpenBackdrop) closeQuickOpen();
+  if (e.target === quickOpenBackdrop) closeAllModals();
 };
 quickOpenInput.oninput = () => {
   paletteIndex = 0;
@@ -2007,7 +2436,7 @@ quickOpenInput.oninput = () => {
 };
 quickOpenInput.onkeydown = (e) => {
   if (e.key === "Escape") {
-    closeQuickOpen();
+    closeAllModals();
   } else if (e.key === "ArrowDown") {
     e.preventDefault();
     if (paletteMatches.length > 0) {
@@ -2024,21 +2453,106 @@ quickOpenInput.onkeydown = (e) => {
     e.preventDefault();
     const chosen = paletteMatches[paletteIndex];
     if (chosen) {
-      closeQuickOpen();
+      closeAllModals();
       void openSourceFile(chosen.abs_path);
     }
   }
 };
 
+// Command Palette events
+cmdPaletteBackdrop.onclick = (e) => {
+  if (e.target === cmdPaletteBackdrop) closeAllModals();
+};
+cmdPaletteInput.oninput = () => {
+  cmdIndex = 0;
+  renderCommandResults();
+};
+cmdPaletteInput.onkeydown = (e) => {
+  if (e.key === "Escape") {
+    closeAllModals();
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (cmdMatches.length > 0) {
+      cmdIndex = (cmdIndex + 1) % cmdMatches.length;
+      renderCommandResults();
+    }
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (cmdMatches.length > 0) {
+      cmdIndex = (cmdIndex - 1 + cmdMatches.length) % cmdMatches.length;
+      renderCommandResults();
+    }
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const chosen = cmdMatches[cmdIndex];
+    if (chosen) {
+      closeAllModals();
+      void chosen.run();
+    }
+  }
+};
+
+// Go to Line events
+gotoLineBackdrop.onclick = (e) => {
+  if (e.target === gotoLineBackdrop) closeAllModals();
+};
+gotoLineInput.onkeydown = (e) => {
+  if (e.key === "Escape") {
+    closeAllModals();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const ln = Number(gotoLineInput.value);
+    if (Number.isFinite(ln) && ln >= 1) {
+      viewer.scrollToLine(ln);
+    }
+    closeAllModals();
+  }
+};
+
+// Shortcuts Modal events
+shortcutsBackdrop.onclick = (e) => {
+  if (e.target === shortcutsBackdrop) closeAllModals();
+};
+shortcutsCloseBtn.onclick = () => closeAllModals();
+
 // Global Keyboard Shortcuts
 window.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
+  if (e.key === "Escape") {
+    closeAllModals();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    openCommandPalette();
+    return;
+  }
   if (mod && e.key.toLowerCase() === "p") {
     e.preventDefault();
     openQuickOpen();
     return;
   }
-  if (mod && e.key.toLowerCase() === "b") {
+  if (mod && e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    openFindBar();
+    return;
+  }
+  if (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "g") {
+    e.preventDefault();
+    openGotoLine();
+    return;
+  }
+  if (mod && e.key === "/") {
+    e.preventDefault();
+    openShortcuts();
+    return;
+  }
+  if (mod && e.altKey && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    toggleRightPane();
+    return;
+  }
+  if (mod && !e.altKey && e.key.toLowerCase() === "b") {
     e.preventDefault();
     toggleLeftPane();
     return;
@@ -2046,6 +2560,21 @@ window.addEventListener("keydown", (e) => {
   if (mod && e.key.toLowerCase() === "j") {
     e.preventDefault();
     toggleDock();
+    return;
+  }
+  if (mod && (e.key === "=" || e.key === "+")) {
+    e.preventDefault();
+    appearance.adjustFontSize(1);
+    return;
+  }
+  if (mod && e.key === "-") {
+    e.preventDefault();
+    appearance.adjustFontSize(-1);
+    return;
+  }
+  if (mod && e.key === "0") {
+    e.preventDefault();
+    appearance.resetFontSize();
     return;
   }
   if (currentStatus.state !== "paused") return;
@@ -2067,19 +2596,14 @@ window.addEventListener("keydown", (e) => {
 // Dock tabs
 document.querySelectorAll<HTMLButtonElement>(".dock-tab").forEach((btn) => {
   btn.onclick = () => {
-    const tab = btn.dataset.tab!;
-    document.querySelectorAll(".dock-tab").forEach((b) => b.classList.remove("active"));
-    document.querySelectorAll(".dock-panel").forEach((p) => p.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById(`tab-${tab}`)?.classList.add("active");
-    document.getElementById("logcat-controls")!.classList.toggle("hidden", tab !== "logcat");
-    document.getElementById("pinned-controls")!.classList.toggle("hidden", tab !== "pinned");
-    document.getElementById("layout-controls")!.classList.toggle("hidden", tab !== "layout");
-    document.getElementById("storage-controls")!.classList.toggle("hidden", tab !== "storage");
-
-    if (tab === "storage" && !storageIndex && packageInput.value.trim()) {
-      void refreshAppStorage();
-    }
+    const tab = btn.dataset.tab as
+      | "logcat"
+      | "crashes"
+      | "breakpoints"
+      | "pinned"
+      | "layout"
+      | "storage";
+    selectDockTab(tab);
   };
 });
 
@@ -2116,7 +2640,7 @@ logcatToggleBtn.onclick = async () => {
   } else {
     const pkg = packageInput.value.trim();
     if (!pkg) {
-      showBanner("Select a package first to start logcat.");
+      showToast("Select a package first to start logcat", "error");
       return;
     }
     await startLogcat(pkg);
@@ -2133,9 +2657,13 @@ logcatClearBtn.onclick = async () => {
 
 // Backend Event Streams & Init
 async function init() {
-  const savedTheme = localStorage.getItem("android-lens:theme") === "light" ? "light" : "dark";
-  applyTheme(savedTheme);
+  renderAppearancePopover();
+  layout.bindAll(() => {
+    if (layoutSnapshot) renderLayoutInspector();
+  });
+
   if (localStorage.getItem("android-lens:leftCollapsed") === "1") toggleLeftPane(true);
+  if (localStorage.getItem("android-lens:rightCollapsed") === "1") toggleRightPane(true);
   if (localStorage.getItem("android-lens:dockCollapsed") === "1") toggleDock(true);
 
   await listen<DebugUiEvent>("debug://event", async (ev) => {
@@ -2146,6 +2674,7 @@ async function init() {
         break;
       case "breakpoints_changed":
         updateBreakpoints(payload.breakpoints);
+        persistProjectBreakpoints();
         break;
       case "paused": {
         selectedThreadId = payload.thread_id_hex;
@@ -2165,7 +2694,7 @@ async function init() {
         syncEditorMarkers();
         break;
       case "vm_exited":
-        showBanner("Target app process exited.", true);
+        showToast("Target app process exited");
         break;
     }
   });
@@ -2197,7 +2726,6 @@ async function init() {
   updatePinnedItems(await invoke<PinnedItem[]>("pin_list"));
   applyStatus(await invoke<SessionStatus>("debug_get_status"));
   await refreshMcpStatus();
-  // Retry once shortly after boot in case the background HTTP MCP server just bound its port
   setTimeout(() => void refreshMcpStatus(), 600);
 
   if (projectRoot) {
@@ -2209,6 +2737,13 @@ async function init() {
     }
   }
   updateGuideChecklist();
+
+  // Gentle ADB device auto-detection while disconnected and window focused
+  setInterval(() => {
+    if (currentStatus.state === "disconnected" && document.hasFocus()) {
+      void refreshDevices(true);
+    }
+  }, 4000);
 }
 
 void init();

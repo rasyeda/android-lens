@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="slate-dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -135,13 +135,13 @@
 
         <div class="toolbar-spacer" data-tauri-drag-region></div>
 
-        <!-- Status & Layout Toggles -->
+        <!-- Status, MCP, Panel Toggles & Appearance -->
         <div class="toolbar-group">
           <span id="status-pill" class="status-pill disconnected">
             <span class="status-dot"></span>
             <span id="status-text">Ready</span>
           </span>
-          <div class="mcp-wrap">
+          <div class="popover-anchor">
             <button id="mcp-pill-btn" class="btn btn-mcp" title="Local MCP server for Claude Code &amp; Antigravity">
               <span class="mcp-dot"></span>
               <span id="mcp-pill-text">MCP</span>
@@ -155,34 +155,65 @@
               <pre id="mcp-snippet" class="mcp-snippet"></pre>
               <div class="mcp-pop-actions">
                 <button id="mcp-copy-btn" class="btn btn-primary btn-xs-h">Copy config</button>
-                <span id="mcp-copy-feedback" class="muted"></span>
               </div>
             </div>
           </div>
           <div class="toolbar-sep"></div>
+          <button id="cmd-palette-btn" class="btn btn-icon" title="Command Palette (⌘K)" aria-label="Command Palette">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4.5 6a1.5 1.5 0 1 1 1.5-1.5V6H4.5zM11.5 6a1.5 1.5 0 1 0-1.5-1.5V6h1.5zM4.5 10a1.5 1.5 0 1 0 1.5 1.5V10H4.5zM11.5 10a1.5 1.5 0 1 1-1.5 1.5V10h1.5z" />
+              <rect x="6" y="6" width="4" height="4" />
+            </svg>
+          </button>
           <button id="toggle-left-btn" class="btn btn-icon active" title="Toggle files panel (⌘B)" aria-label="Toggle files">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
               <rect x="2" y="2.5" width="12" height="11" rx="1.75" />
               <path d="M6 2.5v11" />
             </svg>
           </button>
-          <button id="toggle-dock-btn" class="btn btn-icon active" title="Toggle logcat dock (⌘J)" aria-label="Toggle dock">
+          <button id="toggle-dock-btn" class="btn btn-icon active" title="Toggle bottom dock (⌘J)" aria-label="Toggle dock">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
               <rect x="2" y="2.5" width="12" height="11" rx="1.75" />
               <path d="M2 9.5h12" />
             </svg>
           </button>
-          <button id="theme-toggle-btn" class="btn btn-icon" title="Switch Dark / Light theme" aria-label="Toggle theme">
-            <svg id="theme-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" />
+          <button id="toggle-right-btn" class="btn btn-icon active" title="Toggle inspector panel (⌘⌥B)" aria-label="Toggle inspector">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2.5" width="12" height="11" rx="1.75" />
+              <path d="M10 2.5v11" />
             </svg>
           </button>
+          <div class="popover-anchor">
+            <button id="appearance-btn" class="btn btn-icon" title="Themes &amp; Appearance" aria-label="Appearance">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="8" cy="8" r="5.5" />
+                <path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" fill="currentColor" stroke="none" opacity="0.7" />
+              </svg>
+            </button>
+            <div id="appearance-popover" class="popover popover-right popover-appearance hidden">
+              <div class="pop-section-label">Theme</div>
+              <div id="theme-list" class="theme-list"></div>
+              <div class="pop-divider"></div>
+              <div class="pop-section-label">Code Font Size</div>
+              <div class="font-stepper">
+                <button id="font-dec-btn" class="btn btn-ghost-xs" title="Decrease font size (⌘-)">A−</button>
+                <span id="font-size-label" class="font-size-val">12.5px</span>
+                <button id="font-inc-btn" class="btn btn-ghost-xs" title="Increase font size (⌘+)">A+</button>
+                <button id="font-reset-btn" class="btn btn-ghost-xs" title="Reset font size (⌘0)">Reset</button>
+              </div>
+              <div class="pop-divider"></div>
+              <div class="pop-footer-row">
+                <button id="reset-layout-btn" class="btn btn-ghost-xs">Reset pane sizes</button>
+                <button id="shortcuts-open-btn" class="btn btn-ghost-xs">Shortcuts <kbd class="kbd">⌘/</kbd></button>
+              </div>
+            </div>
+          </div>
         </div>
       </header>
 
       <div id="banner" class="banner hidden"></div>
 
-      <!-- Main Workspace -->
+      <!-- Main Workspace (with draggable splitters) -->
       <main id="workspace" class="workspace">
         <!-- Left Rail: Project Explorer -->
         <aside id="pane-left" class="pane pane-left">
@@ -202,10 +233,22 @@
           <div id="file-tree" class="pane-body file-tree"></div>
         </aside>
 
+        <div id="split-left" class="splitter splitter-v" title="Drag to resize · Double-click to reset"></div>
+
         <!-- Center Stage: Read-Only CodeMirror 6 Source Viewer -->
         <section class="pane pane-center">
           <div id="editor-tabs" class="editor-tabs"></div>
           <div id="editor-container" class="editor-container">
+            <!-- Floating ⌘F In-File Find Bar -->
+            <div id="editor-find-bar" class="find-bar hidden">
+              <input id="find-input" class="ctrl ctrl-sm find-input" placeholder="Find in file…" autocomplete="off" />
+              <span id="find-count" class="find-count">0 / 0</span>
+              <button id="find-case-btn" class="btn btn-ghost-xs" title="Match case">Aa</button>
+              <button id="find-prev-btn" class="btn btn-ghost-xs" title="Previous match (Shift+Enter)">↑</button>
+              <button id="find-next-btn" class="btn btn-ghost-xs" title="Next match (Enter)">↓</button>
+              <button id="find-close-btn" class="btn btn-ghost-xs" title="Close (Esc)">×</button>
+            </div>
+
             <div id="editor-empty" class="empty-stage">
               <div class="guide-card">
                 <div class="guide-title">Get started</div>
@@ -233,22 +276,32 @@
                     <button id="guide-open-btn" class="btn">Open Folder</button>
                   </div>
                 </div>
+                <div class="guide-footer muted">
+                  Press <kbd class="kbd">⌘K</kbd> for all commands · <kbd class="kbd">⌘P</kbd> for quick file open · <kbd class="kbd">⌘/</kbd> for shortcuts
+                </div>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- Right Inspector: Variables First, Call Stack + Thread Selector Below -->
-        <aside class="pane pane-right">
+        <div id="split-right" class="splitter splitter-v" title="Drag to resize · Double-click to reset"></div>
+
+        <!-- Right Inspector: Variables First, Resizable Call Stack Below -->
+        <aside id="pane-right" class="pane pane-right">
           <section class="inspector-section inspector-vars">
             <div class="pane-header">
               <span class="pane-title">VARIABLES</span>
-              <span id="vars-frame-label" class="header-meta"></span>
+              <div class="pane-actions">
+                <input id="vars-filter-input" class="ctrl input-vars-filter" placeholder="Filter…" />
+                <span id="vars-frame-label" class="header-meta"></span>
+              </div>
             </div>
             <div id="vars-tree" class="pane-body vars-tree">
               <div class="empty-hint">Variables appear here when paused</div>
             </div>
           </section>
+
+          <div id="split-inspector" class="splitter splitter-h" title="Drag to resize · Double-click to reset"></div>
 
           <section class="inspector-section inspector-stack">
             <div class="pane-header">
@@ -267,7 +320,9 @@
         </aside>
       </main>
 
-      <!-- Bottom Dock: Logcat, Crashes, Breakpoints -->
+      <div id="split-dock" class="splitter splitter-h" title="Drag to resize · Double-click to reset"></div>
+
+      <!-- Bottom Dock: Logcat, Crashes, Breakpoints, Pinned, Layout, Storage -->
       <footer id="dock" class="dock">
         <div class="dock-header">
           <div class="dock-tabs">
@@ -360,15 +415,17 @@
         </div>
 
         <div id="tab-layout" class="dock-panel">
-          <div class="layout-inspector">
+          <div id="layout-inspector" class="layout-inspector">
             <div class="layout-canvas-pane">
               <div id="layout-stage" class="layout-stage">
                 <div class="empty-hint">Click Capture Screen to dump screenshot + uiautomator hierarchy</div>
               </div>
             </div>
+            <div id="split-layout-1" class="splitter splitter-v" title="Drag to resize · Double-click to reset"></div>
             <div id="layout-tree" class="layout-tree-pane">
               <div class="empty-hint">View hierarchy</div>
             </div>
+            <div id="split-layout-2" class="splitter splitter-v" title="Drag to resize · Double-click to reset"></div>
             <div id="layout-props" class="layout-props-pane">
               <div class="empty-hint">Select a view to inspect bounds &amp; attributes</div>
             </div>
@@ -380,6 +437,7 @@
             <div id="storage-sidebar" class="storage-sidebar">
               <div class="empty-hint">Click Refresh to inspect SharedPreferences, DataStore &amp; SQLite</div>
             </div>
+            <div id="split-storage" class="splitter splitter-v" title="Drag to resize · Double-click to reset"></div>
             <div class="storage-main">
               <div id="storage-sql-bar" class="storage-sql-bar hidden">
                 <input id="storage-sql-input" class="ctrl ctrl-sm" placeholder="SELECT * FROM table LIMIT 100" />
@@ -408,6 +466,61 @@
         <div id="quick-open-results" class="palette-results"></div>
       </div>
     </div>
+
+    <!-- ⌘K Command Palette -->
+    <div id="cmd-palette-backdrop" class="modal-backdrop hidden">
+      <div class="modal-palette">
+        <div class="palette-input-row">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <path d="M5 4.5 9.5 8 5 11.5" />
+            <path d="M9.5 11.5h3" />
+          </svg>
+          <input id="cmd-palette-input" placeholder="Type a command…" autocomplete="off" />
+          <kbd class="kbd">ESC</kbd>
+        </div>
+        <div id="cmd-palette-results" class="palette-results"></div>
+      </div>
+    </div>
+
+    <!-- ⌃G Go to Line Modal -->
+    <div id="goto-line-backdrop" class="modal-backdrop hidden">
+      <div class="modal-palette modal-compact">
+        <div class="palette-input-row">
+          <span class="muted">Line</span>
+          <input id="goto-line-input" type="number" min="1" placeholder="Go to line number…" autocomplete="off" />
+          <kbd class="kbd">ENTER</kbd>
+        </div>
+      </div>
+    </div>
+
+    <!-- ⌘/ Keyboard Shortcuts Modal -->
+    <div id="shortcuts-backdrop" class="modal-backdrop hidden">
+      <div class="modal-palette modal-shortcuts">
+        <div class="shortcuts-head">
+          <span class="popover-title">Keyboard Shortcuts</span>
+          <button id="shortcuts-close-btn" class="btn btn-ghost-xs">Esc</button>
+        </div>
+        <div class="shortcuts-grid">
+          <div class="shortcut-row"><span>Command Palette</span><kbd class="kbd">⌘K</kbd></div>
+          <div class="shortcut-row"><span>Quick Open File</span><kbd class="kbd">⌘P</kbd></div>
+          <div class="shortcut-row"><span>Find in File</span><kbd class="kbd">⌘F</kbd></div>
+          <div class="shortcut-row"><span>Go to Line</span><kbd class="kbd">⌃G</kbd></div>
+          <div class="shortcut-row"><span>Continue</span><kbd class="kbd">F5</kbd></div>
+          <div class="shortcut-row"><span>Step Over</span><kbd class="kbd">F10</kbd></div>
+          <div class="shortcut-row"><span>Step Into</span><kbd class="kbd">F11</kbd></div>
+          <div class="shortcut-row"><span>Step Out</span><kbd class="kbd">⇧F11</kbd></div>
+          <div class="shortcut-row"><span>Toggle Files Rail</span><kbd class="kbd">⌘B</kbd></div>
+          <div class="shortcut-row"><span>Toggle Bottom Dock</span><kbd class="kbd">⌘J</kbd></div>
+          <div class="shortcut-row"><span>Toggle Right Inspector</span><kbd class="kbd">⌘⌥B</kbd></div>
+          <div class="shortcut-row"><span>Code Font Size</span><kbd class="kbd">⌘+ / ⌘− / ⌘0</kbd></div>
+          <div class="shortcut-row"><span>Shortcuts Reference</span><kbd class="kbd">⌘/</kbd></div>
+          <div class="shortcut-row"><span>Reset Splitter Size</span><span class="muted">Double-click divider</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Non-Intrusive Toast Stack -->
+    <div id="toast-container" class="toast-container"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
