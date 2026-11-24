@@ -464,7 +464,7 @@ body.resizing-row * {
 }
 
 .input-vars-filter {
-  width: 104px;
+  width: 86px;
   height: 22px;
   font-size: 11px;
   padding: 0 6px;
@@ -473,7 +473,7 @@ body.resizing-row * {
 
 .select-thread {
   height: 22px;
-  max-width: 120px;
+  max-width: 104px;
   font-family: var(--font-mono);
   font-size: 11px;
   padding: 0 6px;
@@ -880,6 +880,7 @@ body.resizing-row * {
 .pane-right {
   display: grid;
   grid-template-rows: var(--vars-pct) 1px 1fr;
+  overflow: hidden;
 }
 
 .pane-header {
@@ -892,6 +893,7 @@ body.resizing-row * {
   justify-content: space-between;
   gap: var(--sp-2);
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .pane-title {
@@ -899,6 +901,8 @@ body.resizing-row * {
   font-weight: 650;
   letter-spacing: 0.06em;
   color: var(--al-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .pane-actions {
@@ -915,7 +919,7 @@ body.resizing-row * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 110px;
+  max-width: 96px;
 }
 
 .path-bar {
@@ -1323,6 +1327,8 @@ body.resizing-row * {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .vars-tree {
@@ -1599,7 +1605,7 @@ body.resizing-row * {
 
 .log-row {
   display: grid;
-  grid-template-columns: 116px 20px 144px 1fr auto;
+  grid-template-columns: 142px 20px 148px 1fr auto;
   gap: var(--sp-2);
   padding: 1px var(--sp-3);
   white-space: pre-wrap;
@@ -1618,6 +1624,7 @@ body.resizing-row * {
 
 .log-ts {
   color: var(--al-dim);
+  white-space: nowrap;
 }
 
 .log-lvl {
@@ -1822,6 +1829,17 @@ body.resizing-row * {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.frame-right .pin-btn {
+  display: none;
+}
+
+.frame-row:hover .frame-right .pin-btn,
+.crash-head:hover .frame-right .pin-btn,
+.frame-right .pin-btn.pinned {
+  display: inline-flex;
+  opacity: 1;
 }
 
 .pinned-list {
